@@ -1,0 +1,224 @@
+{
+  "projectInfo": {
+    "name": "Community Savings Group",
+    "description": "A premium web app for a community savings group with 25 members, featuring PIN entry, payment tracking, notices, and polls."
+  },
+  "collections": [
+    {
+      "name": "users",
+      "description": "Public user profiles containing role, names, and status.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "displayName": { "type": "string" },
+          "photoURL": { "type": "string" },
+          "role": { "type": "string", "enum": ["member", "admin", "super_admin"] },
+          "names": { 
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "nameId": { "type": "string" },
+                "label": { "type": "string" },
+                "monthlyDue": { "type": "number" }
+              }
+            }
+          },
+          "createdAt": { "type": "timestamp" },
+          "status": { "type": "string", "enum": ["active", "inactive"] }
+        },
+        "required": ["displayName", "role", "createdAt", "status"]
+      },
+      "securityRules": {
+        "read": "request.auth != null",
+        "create": "request.auth != null && request.auth.uid == resource.id && request.resource.data.role == 'member'",
+        "update": "request.auth != null && (request.auth.uid == resource.id && request.resource.data.role == resource.data.role) || (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin'])",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']"
+      }
+    },
+    {
+      "name": "usersPrivate",
+      "description": "Private user data such as email and secure PIN hash.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "email": { "type": "string" },
+          "pinHash": { "type": "string" }
+        },
+        "required": ["email", "pinHash"]
+      },
+      "securityRules": {
+        "read": "request.auth != null && request.auth.uid == resource.id",
+        "create": "request.auth != null && request.auth.uid == resource.id",
+        "update": "request.auth != null && request.auth.uid == resource.id",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']"
+      }
+    },
+    {
+      "name": "payments",
+      "description": "Monthly payment records.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "userId": { "type": "string" },
+          "nameId": { "type": "string" },
+          "month": { "type": "string" },
+          "amount": { "type": "number" },
+          "proofImageURL": { "type": "string" },
+          "message": { "type": "string" },
+          "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+          "approvedBy": { "type": "string" },
+          "approvedAt": { "type": "timestamp" },
+          "lateFine": { "type": "number" },
+          "submittedAt": { "type": "timestamp" }
+        },
+        "required": ["userId", "nameId", "month", "amount", "status", "submittedAt"]
+      },
+      "securityRules": {
+        "read": "request.auth != null",
+        "create": "request.auth != null && request.auth.uid == request.resource.data.userId && request.resource.data.status == 'pending'",
+        "update": "request.auth != null && (request.auth.uid == resource.data.userId || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin'])",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']"
+      }
+    },
+    {
+      "name": "yearlyPayments",
+      "description": "Annual 5000-taka fee payments.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "userId": { "type": "string" },
+          "nameId": { "type": "string" },
+          "year": { "type": "number" },
+          "amount": { "type": "number" },
+          "proofImageURL": { "type": "string" },
+          "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+          "approvedBy": { "type": "string" },
+          "submittedAt": { "type": "timestamp" }
+        },
+        "required": ["userId", "nameId", "year", "amount", "status", "submittedAt"]
+      },
+      "securityRules": {
+        "read": "request.auth != null",
+        "create": "request.auth != null && request.auth.uid == request.resource.data.userId && request.resource.data.status == 'pending'",
+        "update": "request.auth != null && (request.auth.uid == resource.data.userId || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin'])",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']"
+      }
+    },
+    {
+      "name": "notices",
+      "description": "Notices posted by admins.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "content": { "type": "string" },
+          "postedBy": { "type": "string" },
+          "postedAt": { "type": "timestamp" }
+        },
+        "required": ["title", "content", "postedBy", "postedAt"]
+      },
+      "securityRules": {
+        "read": "request.auth != null",
+        "create": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']",
+        "update": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']"
+      }
+    },
+    {
+      "name": "polls",
+      "description": "Polls created by admins, open to all members.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "question": { "type": "string" },
+          "options": { 
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "optionId": { "type": "string" },
+                "text": { "type": "string" },
+                "votes": { "type": "number" }
+              }
+            }
+          },
+          "votedUserIds": { 
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "createdBy": { "type": "string" },
+          "createdAt": { "type": "timestamp" },
+          "isActive": { "type": "boolean" }
+        },
+        "required": ["question", "options", "createdBy", "createdAt", "isActive"]
+      },
+      "securityRules": {
+        "read": "request.auth != null",
+        "create": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']",
+        "update": "request.auth != null",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']"
+      }
+    },
+    {
+      "name": "activityLog",
+      "description": "Global activity log for transparency.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "actorId": { "type": "string" },
+          "action": { "type": "string" },
+          "targetId": { "type": "string" },
+          "description": { "type": "string" },
+          "timestamp": { "type": "timestamp" }
+        },
+        "required": ["actorId", "action", "description", "timestamp"]
+      },
+      "securityRules": {
+        "read": "request.auth != null",
+        "create": "request.auth != null",
+        "update": "false",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']"
+      }
+    },
+    {
+      "name": "communityMessages",
+      "description": "Shared chat board for all members.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "userId": { "type": "string" },
+          "message": { "type": "string" },
+          "timestamp": { "type": "timestamp" }
+        },
+        "required": ["userId", "message", "timestamp"]
+      },
+      "securityRules": {
+        "read": "request.auth != null",
+        "create": "request.auth != null && request.auth.uid == request.resource.data.userId",
+        "update": "false",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']"
+      }
+    },
+    {
+      "name": "adminSupportMessages",
+      "description": "Direct messages from members to admins.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "fromUserId": { "type": "string" },
+          "message": { "type": "string" },
+          "repliedBy": { "type": "string" },
+          "timestamp": { "type": "timestamp" }
+        },
+        "required": ["fromUserId", "message", "timestamp"]
+      },
+      "securityRules": {
+        "read": "request.auth != null && (request.auth.uid == resource.data.fromUserId || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin'])",
+        "create": "request.auth != null && request.auth.uid == request.resource.data.fromUserId",
+        "update": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']",
+        "delete": "request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['admin', 'super_admin']"
+      }
+    }
+  ]
+}

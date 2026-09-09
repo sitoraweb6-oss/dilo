@@ -1,0 +1,21 @@
+1. Root Cause
+The MobileNumberCollection component performs the Firestore update (`updateDoc`), but it assumes that `AuthContext` uses an `onSnapshot` listener to automatically reflect changes. However, `AuthContext` actually uses a one-time `getDoc` fetch when the auth state changes. Thus, the local React state remains stale after saving, keeping the user stuck on the missing mobile number screen until they manually reload the page.
+
+2. Implementation Plan
+- In `src/lib/AuthContext.tsx`, add a new function `updateUserProfileLocal: (updates: Partial<UserProfile>) => void`. This function will spread the `updates` object over the existing `userProfile` state using `setUserProfile`.
+- In `src/components/MobileNumberCollection.tsx`, extract `updateUserProfileLocal` from `useAuth()`.
+- Immediately after the successful `updateDoc`, call `updateUserProfileLocal` with the newly saved mobile numbers. This will instantly update the `AuthContext` state (Optimistic UI) and remove the blocking screen without triggering a reload or an extra Firestore read.
+
+3. Files to modify
+- `src/lib/AuthContext.tsx`
+- `src/components/MobileNumberCollection.tsx`
+
+4. Why only those files
+`AuthContext.tsx` is the source of truth for the `userProfile` state, and `MobileNumberCollection.tsx` is responsible for handling the save action. Modifying only these two files is the exact minimum required to pass the updated data to the global state immediately.
+
+5. Estimated Firestore Reads
+Before: 1 (The uniqueness query). The UI was broken and required a manual reload, which would cause an additional 1 read on initialization.
+After: 1 (The uniqueness query). Updating the local context requires 0 reads.
+
+6. Why no existing feature will break
+We are strictly adding a synchronous local state updater to the Context provider. This method will only be called after a confirmed Firestore write and will not disrupt authentication checks, payments, approval workflows, or any other existing business logic.

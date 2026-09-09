@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="A trusted savings group application" />
+    <meta property="og:title" content="ميثاق (Mīthāq)" />
+    <meta property="og:description" content="A trusted savings group application" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="ميثاق (Mīthāq)" />
+    <meta name="twitter:description" content="A trusted savings group application" />
+    <title>ميثاق (Mīthāq)</title>
+    <script>
+      (function() {
+        try {
+          var rawFetch = window.fetch;
+          var boundFetch = rawFetch ? rawFetch.bind(window) : undefined;
+          var activeFetch = boundFetch;
+          Object.defineProperty(window, 'fetch', {
+            get: function() {
+              return activeFetch || boundFetch;
+            },
+            set: function(fn) {
+              activeFetch = fn;
+            },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {
+          // Ignore if environment forbids property definition
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

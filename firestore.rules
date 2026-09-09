@@ -1,0 +1,178 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+          userDoc().role in ['admin', 'super_admin', 'Admin', 'Super Admin', 'SUPER_ADMIN'] ||
+          ('permissions' in userDoc() && (
+            userDoc().permissions.hasAny(['admin', 'super_admin', 'Admin', 'Super Admin'])
+          ))
+        );
+    }
+    
+    function isMemberUpdate(paymentId) {
+      let isOwner = request.auth.uid == resource.data.userId;
+      let isPending = resource.data.status == 'pending';
+      let unchangedStatus = request.resource.data.status == resource.data.status;
+      let unchangedApproval = (!('firstApprovedBy' in resource.data) && !('firstApprovedBy' in request.resource.data)) ||
+                              (request.resource.data.firstApprovedBy == resource.data.firstApprovedBy);
+      let unchangedCore = request.resource.data.amount == resource.data.amount &&
+                          request.resource.data.month == resource.data.month &&
+                          request.resource.data.nameId == resource.data.nameId &&
+                          request.resource.data.paymentType == resource.data.paymentType;
+      return isOwner && isPending && unchangedStatus && unchangedApproval && unchangedCore;
+    }
+
+    function isAdminApproval(paymentId) {
+      let isOwner = request.auth.uid == resource.data.userId;
+      let statusChangedToLevel1 = resource.data.status == 'pending' && request.resource.data.status == 'level_1_approved';
+      let statusChangedToApproved = resource.data.status == 'level_1_approved' && request.resource.data.status == 'approved';
+      let statusChangedToRejected = request.resource.data.status == 'rejected';
+      
+      let validLevel1 = statusChangedToLevel1 && 
+                        request.resource.data.firstApprovedBy == request.auth.uid &&
+                        (!('secondApprovedBy' in request.resource.data) || request.resource.data.secondApprovedBy == null);
+                        
+      let validLevel2 = statusChangedToApproved && 
+                        (!('firstApprovedBy' in resource.data) || request.resource.data.firstApprovedBy == resource.data.firstApprovedBy) &&
+                        request.resource.data.secondApprovedBy == request.auth.uid &&
+                        (!('firstApprovedBy' in resource.data) || request.auth.uid != resource.data.firstApprovedBy);
+
+      return isAdmin() && !isOwner && (validLevel1 || validLevel2 || statusChangedToRejected);
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isAuthenticated() && (
+        (request.auth.uid == userId && (!('role' in request.resource.data) || request.resource.data.role == resource.data.role)) ||
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+    
+    match /usersPrivate/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAdmin();
+    }
+    
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId && request.resource.data.status == 'pending';
+      allow update: if isMemberUpdate(paymentId) || isAdminApproval(paymentId);
+      allow delete: if isAdmin();
+    }
+    
+    match /yearlyPayments/{paymentId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId && request.resource.data.status == 'pending';
+      allow update: if isMemberUpdate(paymentId) || isAdminApproval(paymentId);
+      allow delete: if isAdmin();
+    }
+    
+    match /notices/{noticeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /polls/{pollId} {
+      allow read: if isAuthenticated();
+      allow create, delete: if isAdmin();
+      allow update: if isAuthenticated(); // Members can vote
+    }
+    
+    match /activityLog/{logId} {
+      allow read, create: if isAuthenticated();
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+    
+    match /communityMessages/{messageId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+    
+    match /adminSupportMessages/{messageId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.fromUserId || isAdmin());
+      allow create: if isAuthenticated() && (request.auth.uid == request.resource.data.fromUserId || isAdmin());
+      allow update, delete: if isAdmin();
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    match /hadiths/{hadithId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /photoCarousel/{photoId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /profileChangeRequests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.memberUid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /adminRequests/{docId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /slotRequests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
+      allow update, delete: if isAdmin();
+    }
+
+
+
+    match /investments/{investmentId} {
+      allow read: if isAuthenticated();
+      allow create, delete: if isAdmin();
+      allow update: if isAuthenticated(); // Admins handle approval, Members handle voting
+    }
+    match /investmentTransactions/{txnId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    match /accountMigrations/{migrationId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.requestedBy;
+      allow update, delete: if isAdmin();
+    }
+    match /pinRecoveryRequests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
+      allow update: if isAdmin() && request.auth.uid != resource.data.userId;
+      allow delete: if isAdmin();
+    }
+  }
+}
