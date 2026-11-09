@@ -104,7 +104,7 @@ export const PendingPaymentItem: React.FC<{ payment: Payment, user?: UserProfile
   // server timestamp so a wrong phone date can't be used to skip a fine.
   const fineWarning = (() => {
     const submitted = payment.submittedAt?.toDate ? payment.submittedAt.toDate() : null;
-    if (!submitted || !payment.monthBreakdown?.length) return null;
+    if (!submitted || !payment.monthBreakdown?.length || payment.entryType === 'manual') return null;
     const expected = payment.monthBreakdown.reduce((s, b) => s + lateFineFor(b.month, paySettings, submitted), 0);
     const charged = payment.monthBreakdown.reduce((s, b) => s + (b.lateFine || 0), 0);
     if (expected === charged) return null;
@@ -266,6 +266,11 @@ export const PendingPaymentItem: React.FC<{ payment: Payment, user?: UserProfile
               ⚠️ জরিমানা মিলছে না: জমার সার্ভার-সময় অনুযায়ী জরিমানা হওয়ার কথা ৳{fineWarning.expected}, কিন্তু ধরা হয়েছে ৳{fineWarning.charged}।
               {fineWarning.submittedMonth !== fineWarning.declaredMonth && ' (মেম্বারের ফোনের তারিখ ভুল থাকতে পারে)'}
               {' '}টাকা যাচাই করে প্রয়োজনে বাতিল করুন।
+            </div>
+          )}
+          {payment.entryType === 'manual' && (
+            <div className="bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-lg p-2 my-1 text-[11px] font-medium">
+              ম্যানুয়াল এন্ট্রি — দিয়েছেন {payment.enteredByName || 'অ্যাডমিন'}{payment.receivedDate ? `, টাকা গ্রহণ ${payment.receivedDate.split('-').reverse().join('/')}` : ''}। আপনার অনুমোদনে হিসাবে যোগ হবে।
             </div>
           )}
           <p><strong>স্লট:</strong> {user?.names?.find(n => n.nameId === payment.nameId)?.label || payment.nameId}</p>

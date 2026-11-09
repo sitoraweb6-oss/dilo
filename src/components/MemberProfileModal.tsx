@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { UserProfile, Payment } from '../types';
-import { X, ShieldCheck, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
+import { X, ShieldCheck, CheckCircle2, Clock, AlertCircle, PenLine } from 'lucide-react';
 import { format } from 'date-fns';
 import { getMemberSlotSummary } from '../lib/paymentUtils';
 import { buildMemberLedger, describePaymentBn, monthListLabelBn } from '../lib/ledger';
 import { usePaymentSettings } from '../lib/usePaymentSettings';
 import { MemberStatement } from './MemberStatement';
+import { ManualEntryModal } from './ManualEntryModal';
 import { db } from '../lib/firebase';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
@@ -24,6 +25,7 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
   const { settings } = usePaymentSettings();
   const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showManualEntry, setShowManualEntry] = useState(false);
 
   useEffect(() => {
     if (!member) {
@@ -149,6 +151,24 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
               </div>
             </div>
 
+            {isAdmin && userProfile && userProfile.id !== member.id && !loading && (
+              <button
+                onClick={() => setShowManualEntry(true)}
+                className="w-full mb-4 flex items-center justify-center gap-2 bg-indigo-50 border border-indigo-100 text-indigo-700 font-bold text-sm py-2.5 rounded-xl hover:bg-indigo-100"
+              >
+                <PenLine size={16} /> ম্যানুয়াল এন্ট্রি (নগদ/পুরোনো টাকা)
+              </button>
+            )}
+            {showManualEntry && userProfile && (
+              <ManualEntryModal
+                member={member}
+                payments={payments}
+                settings={settings}
+                admin={userProfile}
+                onClose={() => setShowManualEntry(false)}
+                onSaved={p => setPayments(prev => [p, ...prev])}
+              />
+            )}
             {loading ? (
               <div className="flex justify-center p-4"><div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
             ) : (

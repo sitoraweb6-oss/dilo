@@ -16,7 +16,10 @@ interface Expense {
   date: string;
   loggedBy: string;
   loggedByName: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'level_1_approved' | 'approved' | 'rejected';
+  firstApprovedBy?: string;
+  firstApprovedByName?: string;
+  firstApprovedAt?: any;
   approvedBy?: string;
   approvedByName?: string;
   approvedAt?: any;
@@ -79,25 +82,46 @@ export function Expenses() {
     if (processingId) return;
     try {
       setProcessingId(expense.id);
-      await updateDoc(doc(db, 'expenses', expense.id), {
-        status: 'approved',
-        approvedBy: userProfile?.id,
-        approvedByName: userProfile?.displayName,
-        approvedAt: serverTimestamp()
-      });
+      const isFirst = expense.status === 'pending';
+      if (!isFirst && expense.firstApprovedBy === userProfile?.id) {
+        alert('আপনি প্রথম অনুমোদন দিয়েছেন। দ্বিতীয় অনুমোদন অন্য একজন অ্যাডমিনকে দিতে হবে।');
+        return;
+      }
+      if (isFirst) {
+        await updateDoc(doc(db, 'expenses', expense.id), {
+          status: 'level_1_approved',
+          firstApprovedBy: userProfile?.id,
+          firstApprovedByName: userProfile?.displayName || '',
+          firstApprovedAt: serverTimestamp()
+        });
+      } else {
+        await updateDoc(doc(db, 'expenses', expense.id), {
+          status: 'approved',
+          approvedBy: userProfile?.id,
+          approvedByName: userProfile?.displayName || '',
+          approvedAt: serverTimestamp()
+        });
+      }
       await addDoc(collection(db, 'activityLog'), {
         actorId: userProfile?.id,
-        description: `${userProfile?.displayName} ৳${expense.amount} এর খরচটি অনুমোদন করেছেন`,
+        description: isFirst
+          ? `${userProfile?.displayName} ৳${expense.amount} এর খরচটিতে প্রথম অনুমোদন দিয়েছেন`
+          : `${userProfile?.displayName} ৳${expense.amount} এর খরচটি চূড়ান্ত অনুমোদন করেছেন`,
         timestamp: serverTimestamp(),
       });
-      
+
       // Optimistic UI update
-      setExpenses(expenses.map(e => 
-        e.id === expense.id ? { ...e, status: 'approved' } : e
+      setExpenses(expenses.map(e =>
+        e.id === expense.id
+          ? (isFirst
+              ? { ...e, status: 'level_1_approved', firstApprovedBy: userProfile?.id, firstApprovedByName: userProfile?.displayName }
+              : { ...e, status: 'approved', approvedByName: userProfile?.displayName })
+          : e
       ));
 
-      // Send Push Notification
-      await sendPushNotificationToAll('📊 নতুন হিসাব প্রকাশিত হয়েছে', 'সর্বশেষ হিসাব এখন দেখা যাচ্ছে।');
+      if (!isFirst) {
+        await sendPushNotificationToAll('📊 নতুন হিসাব প্রকাশিত হয়েছে', 'সর্বশেষ হিসাব এখন দেখা যাচ্ছে।');
+      }
     } catch (error) {
       console.error(error);
     } finally {
@@ -236,7 +260,7 @@ export function Expenses() {
                     <div className="mt-2">
                       {expense.status === 'approved' && (
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-md">
-                          <CheckCircle2 size={12} /> অনুমোদিত ({expense.approvedByName})
+                          <CheckCircle2 size={12} /> অনুমোদিত ({[expense.firstApprovedByName, expense.approvedByName].filter(Boolean).join(' ও ')})
                         </span>
                       )}
                       {expense.status === 'rejected' && (
@@ -246,7 +270,12 @@ export function Expenses() {
                       )}
                       {expense.status === 'pending' && (
                         <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
-                          পেন্ডিং
+                          পেন্ডিং (০/২ অনুমোদন)
+                        </span>
+                      )}
+                      {expense.status === 'level_1_approved' && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-1 rounded-md">
+                          ১/২ অনুমোদন ({expense.firstApprovedByName}) — আরেকজন অ্যাডমিন লাগবে
                         </span>
                       )}
                     </div>
@@ -255,7 +284,7 @@ export function Expenses() {
                   <div className="flex flex-col items-end gap-2">
                     <span className="font-bold text-lg text-slate-800">৳{expense.amount}</span>
                     
-                    {expense.status === 'pending' && isAdmin && !isMine && (
+                    {((expense.status === 'pending' && !isMine) || (expense.status === 'level_1_approved' && expense.firstApprovedBy !== userProfile?.id)) && isAdmin && (
                       <div className="flex gap-2">
                         <button onClick={() => handleReject(expense)} disabled={processingId === expense.id} className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50">
                           <X size={16} />
