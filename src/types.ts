@@ -79,6 +79,12 @@ export interface Payment {
   /** annual contribution years this payment covers, e.g. ['2025', '2026'] */
   annualYears?: string[];
   annualAmount?: number;
+  /** 'manual' = entered by an admin on the member's behalf (cash / old records) */
+  entryType?: 'manual';
+  enteredBy?: string;
+  enteredByName?: string;
+  /** date the money was actually received (yyyy-MM-dd), for manual entries */
+  receivedDate?: string;
   cashRecipientName?: string;
   senderBankAccountNumber?: string;
   senderBankAccountHolderName?: string;

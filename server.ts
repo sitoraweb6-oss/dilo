@@ -5,7 +5,13 @@ import { createServer as createViteServer } from "vite";
 import { initializeApp, cert } from 'firebase-admin/app';
 import { getMessaging } from 'firebase-admin/messaging';
 import { getAuth } from 'firebase-admin/auth';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore as getFirestoreForDb } from 'firebase-admin/firestore';
+import appletConfig from './firebase-applet-config.json';
+
+// The web app uses a named Firestore database (firestoreDatabaseId), not "(default)".
+// Every server-side read/write must use the same database, or admin checks find no users.
+const FIRESTORE_DB_ID: string = (appletConfig as any).firestoreDatabaseId || '(default)';
+const getFirestore = () => getFirestoreForDb(FIRESTORE_DB_ID);
 import cors from "cors";
 
 const app = express();

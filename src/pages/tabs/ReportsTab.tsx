@@ -12,6 +12,10 @@ import {
   MonthLine, MemberLedger, toBnDigits,
 } from '../../lib/ledger';
 import { MemberStatement } from '../../components/MemberStatement';
+import { printMonthlyReport, printYearlyReport } from '../../lib/printReport';
+import { useAuth } from '../../lib/AuthContext';
+import { paidDateOf } from '../../lib/ledger';
+import { MessageCircle } from 'lucide-react';
 
 const BN_SHORT = ['জানু', 'ফেব্রু', 'মার্চ', 'এপ্রি', 'মে', 'জুন', 'জুলা', 'আগ', 'সেপ্টে', 'অক্টো', 'নভে', 'ডিসে'];
 const taka = (n: number) => `৳ ${Math.round(n).toLocaleString('en-IN')}`;
@@ -34,6 +38,10 @@ export function ReportsTab() {
   const [reportMonth, setReportMonth] = useState(currentMonth);
   const [matrixYear, setMatrixYear] = useState(currentMonth.slice(0, 4));
   const [statementMemberId, setStatementMemberId] = useState('');
+  const { isAdmin } = useAuth();
+  // বকেয়া তালিকার মাস বাছাই: খালি = সব মাস
+  const [dueMonthSel, setDueMonthSel] = useState<string[]>([]);
+  const [dueIncludeAnnual, setDueIncludeAnnual] = useState(true);
 
   useEffect(() => {
     let isMounted = true;
@@ -115,6 +123,39 @@ export function ReportsTab() {
     }));
   const totalDues = duesList.reduce((s, d) => s + d.ledger.dueAmount, 0);
 
+  // months that have any dues, for the filter chips (newest first)
+  const dueMonthOptions = Array.from(new Set(
+    ledgers.flatMap(l => l.slots.flatMap(s => s.months.filter(x => x.status === 'overdue' || x.status === 'current').map(x => x.month)))
+  )).sort().reverse();
+
+  const waNumber = (raw?: string) => {
+    const digits = String(raw || '').replace(/\D/g, '');
+    if (!digits) return '';
+    if (digits.startsWith('880')) return digits;
+    if (digits.startsWith('0')) return '88' + digits;
+    if (digits.length === 10 && digits.startsWith('1')) return '880' + digits;
+    return digits;
+  };
+
+  const filteredDues = ledgers.map(l => {
+    const lines = l.slots.map(s => {
+      const months = s.months.filter(x => (x.status === 'overdue' || x.status === 'current') && (dueMonthSel.length === 0 || dueMonthSel.includes(x.month)));
+      const years = dueIncludeAnnual ? s.annual.filter(a => a.status === 'overdue').map(a => a.year) : [];
+      const amount = months.reduce((t, x) => t + x.baseAmount + x.lateFine, 0) + years.length * (settings.annualAmount || 0);
+      return { slot: s.slot.label, months, years, amount };
+    }).filter(x => x.amount > 0);
+    const amount = lines.reduce((t, x) => t + x.amount, 0);
+    const fine = lines.reduce((t, x) => t + x.months.reduce((u, m) => u + m.lateFine, 0), 0);
+    const parts = lines.map(x => {
+      const ms = x.months.map(m => `${monthLabelBn(m.month)}${m.lateFine ? ` (জরিমানা ৳${m.lateFine})` : ''}`);
+      const ys = x.years.map(y => `${y} সালের বার্ষিক`);
+      return `${lines.length > 1 ? x.slot + ': ' : ''}${[...ms, ...ys].join(', ')}`;
+    });
+    const msg = `আসসালামু আলাইকুম ${l.member.displayName},\nমিছাক সমিতিতে আপনার বকেয়া:\n${parts.join('\n')}\n\nমোট: ৳${Math.round(amount).toLocaleString('en-IN')}${fine ? ` (জরিমানা ৳${fine} সহ)` : ''}\nঅনুগ্রহ করে অ্যাপ থেকে দ্রুত পরিশোধ করুন। ধন্যবাদ।`;
+    const num = waNumber(l.member.personalMobile);
+    return { member: l.member, lines, amount, waLink: num ? `https://wa.me/${num}?text=${encodeURIComponent(msg)}` : '' };
+  }).filter(d => d.amount > 0).sort((a, b) => b.amount - a.amount);
+
   const nameOf = (id: string) => allUsers.find(m => m.id === id)?.displayName || 'Unknown';
   const slotOf = (p: Payment) => allUsers.find(m => m.id === p.userId)?.names?.find(n => n.nameId === p.nameId)?.label || '';
 
@@ -194,37 +235,6 @@ export function ReportsTab() {
     }
   };
 
-  const exportToPDF = async () => {
-    try {
-      setExporting('pdf');
-      const { default: jsPDF } = await import('jspdf');
-      const { default: autoTable } = await import('jspdf-autotable');
-      const doc = new jsPDF();
-      // jsPDF default fonts cannot render Bangla, so the PDF uses English labels.
-      doc.text(`Mithaq Monthly Report - ${reportMonth}`, 14, 15);
-      doc.setFontSize(10);
-      doc.text(`Expected: ${monthExpected}  |  Collected: ${Math.round(monthCollected.base)} + fine ${Math.round(monthCollected.fine)}  |  Paid ${monthPaid}, Pending ${monthPending}, Due ${monthDue} slots`, 14, 22);
-      autoTable(doc, {
-        head: [['Member', 'Slot', 'Status', 'Amount (BDT)']],
-        body: monthRows.map(r => [r.member.displayName, r.slotLabel, STATUS_EN[r.line!.status], String(r.line!.baseAmount + r.line!.lateFine)]),
-        startY: 27,
-      });
-      const y = (doc as any).lastAutoTable?.finalY || 40;
-      doc.text(`Total outstanding dues: ${Math.round(totalDues)} BDT`, 14, y + 10);
-      autoTable(doc, {
-        head: [['Member', 'Slot', 'Due months', 'Annual', 'Amount (BDT)']],
-        body: duesList.flatMap(d => d.lines.map(x => [d.ledger.member.displayName, x.slot, x.months.join(', '), x.years.join(', '), String(Math.round(x.amount))])),
-        startY: y + 14,
-      });
-      doc.save(`mithaq_report_${reportMonth}.pdf`);
-    } catch (err) {
-      console.error('Failed to export PDF:', err);
-      alert('PDF তৈরি করতে সমস্যা হয়েছে।');
-    } finally {
-      setExporting(null);
-    }
-  };
-
   if (loading || settingsLoading) {
     return <div className="flex justify-center items-center h-[60vh]"><Loader2 className="animate-spin text-primary-500 w-8 h-8" /></div>;
   }
@@ -242,9 +252,6 @@ export function ReportsTab() {
       <div className="flex justify-between items-center mb-2 print:hidden">
         <h2 className="text-xl font-bold font-heading text-slate-800">ফাইন্যান্স রিপোর্ট</h2>
         <div className="flex gap-2">
-          <button onClick={exportToPDF} disabled={exporting !== null} className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 disabled:opacity-50 transition-colors" title="Export PDF">
-            {exporting === 'pdf' ? <Loader2 size={18} className="animate-spin" /> : <FileText size={18} />}
-          </button>
           <button onClick={exportToExcel} disabled={exporting !== null} className="p-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 disabled:opacity-50 transition-colors" title="Export Excel">
             {exporting === 'excel' ? <Loader2 size={18} className="animate-spin" /> : <FileSpreadsheet size={18} />}
           </button>
@@ -252,6 +259,26 @@ export function ReportsTab() {
             <Printer size={18} />
           </button>
         </div>
+      </div>
+
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm print:hidden">
+        <p className="text-sm font-bold text-slate-800 mb-1 flex items-center gap-2"><FileText size={16} className="text-red-500" /> PDF রিপোর্ট</p>
+        <p className="text-[11px] text-slate-500 mb-3">খোলার পর প্রিন্ট উইন্ডো আসবে — সেখানে "Save as PDF" বেছে নিন।</p>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => printMonthlyReport(reportMonth, { ledgers, payments, users: allUsers, expenses })}
+            className="bg-red-50 border border-red-100 text-red-700 font-bold text-sm py-2.5 rounded-xl hover:bg-red-100"
+          >
+            মাসিক — {monthLabelBn(reportMonth)}
+          </button>
+          <button
+            onClick={() => printYearlyReport(matrixYear, { ledgers, payments, users: allUsers, expenses })}
+            className="bg-red-50 border border-red-100 text-red-700 font-bold text-sm py-2.5 rounded-xl hover:bg-red-100"
+          >
+            বার্ষিক — {toBnDigits(matrixYear)}
+          </button>
+        </div>
+        <p className="text-[10px] text-slate-400 mt-2">মাস ও বছর বদলাতে নিচের "মাসভিত্তিক হিসাব" ও "বার্ষিক ছক"-এর ঘর থেকে বাছাই করুন।</p>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -323,24 +350,54 @@ export function ReportsTab() {
         </div>
       </div>
 
-      {/* Dues list */}
+      {/* Dues list with month filter */}
       <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm print:shadow-none">
-        <h3 className="font-bold text-slate-800 mb-4 font-heading">বকেয়া তালিকা</h3>
-        {duesList.length === 0 ? (
-          <p className="text-sm text-emerald-600 text-center py-4">কারো কোনো বকেয়া নেই</p>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-bold text-slate-800 font-heading">বকেয়া তালিকা</h3>
+          <span className="text-sm font-bold text-red-600">{taka(filteredDues.reduce((t, d) => t + d.amount, 0))}</span>
+        </div>
+        <p className="text-[11px] text-slate-500 mb-2">কোন কোন মাসের বকেয়া দেখতে চান বাছাই করুন (কিছু না বাছলে সব মাস)</p>
+        <div className="flex gap-1.5 overflow-x-auto pb-2 -mx-5 px-5">
+          <button onClick={() => setDueMonthSel([])} className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap ${dueMonthSel.length === 0 ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'}`}>সব মাস</button>
+          {dueMonthOptions.map(m => {
+            const on = dueMonthSel.includes(m);
+            return (
+              <button key={m} onClick={() => setDueMonthSel(on ? dueMonthSel.filter(x => x !== m) : [...dueMonthSel, m].sort())}
+                className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap ${on ? 'bg-red-600 text-white' : 'bg-red-50 text-red-700 border border-red-100'}`}>
+                {monthLabelBn(m)}
+              </button>
+            );
+          })}
+        </div>
+        <label className="flex items-center gap-2 text-xs text-slate-600 mb-3">
+          <input type="checkbox" checked={dueIncludeAnnual} onChange={e => setDueIncludeAnnual(e.target.checked)} className="accent-red-600" />
+          আগের বছরের বকেয়া বার্ষিক চাঁদাও দেখাও
+        </label>
+        {filteredDues.length === 0 ? (
+          <p className="text-sm text-emerald-600 text-center py-4">এই বাছাইয়ে কারো কোনো বকেয়া নেই</p>
         ) : (
           <div className="space-y-3">
-            {duesList.map(d => (
-              <div key={d.ledger.member.id} className="border border-red-100 bg-red-50/40 rounded-xl p-3">
-                <div className="flex justify-between items-center">
-                  <p className="font-bold text-slate-800 text-sm">{d.ledger.member.displayName}</p>
-                  <p className="font-bold text-red-600 text-sm">{taka(d.ledger.dueAmount)}</p>
+            {filteredDues.map(d => (
+              <div key={d.member.id} className="border border-red-100 bg-red-50/40 rounded-xl p-3">
+                <div className="flex justify-between items-center gap-2">
+                  <p className="font-bold text-slate-800 text-sm">{d.member.displayName}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-red-600 text-sm">{taka(d.amount)}</p>
+                    {isAdmin && (
+                      d.waLink ? (
+                        <a href={d.waLink} target="_blank" rel="noreferrer" title="WhatsApp-এ জানান"
+                          className="flex items-center gap-1 text-[11px] font-bold text-white bg-green-600 hover:bg-green-700 px-2 py-1 rounded-lg">
+                          <MessageCircle size={13} /> WhatsApp
+                        </a>
+                      ) : <span className="text-[10px] text-slate-400">নম্বর নেই</span>
+                    )}
+                  </div>
                 </div>
                 {d.lines.map(x => (
                   <p key={x.slot} className="text-xs text-slate-600 mt-1">
                     <span className="font-medium">{x.slot}:</span>{' '}
-                    {x.months.length > 0 && monthListLabelBn(x.months)}
-                    {x.years.length > 0 && ` • বার্ষিক ${x.years.join(', ')}`}
+                    {x.months.map(m => `${monthLabelBn(m.month)}${m.lateFine ? ` (জরিমানা ৳${m.lateFine})` : ''}`).join(', ')}
+                    {x.years.length > 0 && `${x.months.length ? ' • ' : ''}বার্ষিক ${x.years.map(toBnDigits).join(', ')}`}
                   </p>
                 ))}
               </div>
@@ -357,7 +414,7 @@ export function ReportsTab() {
             {Array.from(new Set(monthOptions.map(m => m.slice(0, 4)))).map(y => <option key={y} value={y}>{toBnDigits(y)}</option>)}
           </select>
         </div>
-        <p className="text-[10px] text-slate-500 mb-3">✓ পরিশোধিত • … অপেক্ষমাণ • ✗ বকেয়া • ফাঁকা = হিসাব শুরু হয়নি / ভবিষ্যৎ</p>
+        <p className="text-[10px] text-slate-500 mb-3">সবুজ ঘরে জমার তারিখ (দিন/মাস) • … অপেক্ষমাণ • ✗ বকেয়া • নীল বর্ডার = ম্যানুয়াল এন্ট্রি • ফাঁকা = হিসাব শুরু হয়নি / ভবিষ্যৎ</p>
         <div className="overflow-x-auto -mx-5 px-5">
           <table className="text-[11px] border-collapse min-w-max">
             <thead>
@@ -383,12 +440,18 @@ export function ReportsTab() {
                       const line = all.find(x => x.month === m);
                       const st = line?.status;
                       const cls = st === 'paid' ? 'bg-emerald-100 text-emerald-700' : st === 'pending' ? 'bg-amber-100 text-amber-700' : st === 'overdue' || st === 'current' ? 'bg-red-100 text-red-700' : 'bg-slate-50 text-slate-300';
-                      const sym = st === 'paid' ? '✓' : st === 'pending' ? '…' : st === 'overdue' || st === 'current' ? '✗' : '';
-                      return <td key={m} className="px-0.5 py-0.5"><div className={`w-7 h-6 rounded flex items-center justify-center font-bold ${cls}`}>{sym}</div></td>;
+                      const pd = st === 'paid' && line?.payment ? paidDateOf(line.payment) : null;
+                      const sym = st === 'paid' ? (pd ? toBnDigits(format(pd, 'dd/MM')) : '✓') : st === 'pending' ? '…' : st === 'overdue' || st === 'current' ? '✗' : '';
+                      const tip = pd ? `জমা: ${format(pd, 'dd/MM/yyyy')}${line?.payment?.entryType === 'manual' ? ' (ম্যানুয়াল)' : ''}` : undefined;
+                      return (
+                        <td key={m} className="px-0.5 py-0.5">
+                          <div title={tip} className={`w-11 h-7 rounded flex items-center justify-center font-bold text-[10px] leading-none ${cls} ${line?.payment?.entryType === 'manual' ? 'ring-1 ring-indigo-300' : ''}`}>{sym}</div>
+                        </td>
+                      );
                     })}
                     <td className="px-0.5 py-0.5">
-                      <div className={`w-9 h-6 rounded flex items-center justify-center font-bold ${annual?.status === 'paid' ? 'bg-emerald-100 text-emerald-700' : annual?.status === 'pending' ? 'bg-amber-100 text-amber-700' : annual?.status === 'overdue' ? 'bg-red-100 text-red-700' : annual ? 'bg-slate-100 text-slate-500' : 'bg-slate-50 text-slate-300'}`}>
-                        {annual?.status === 'paid' ? '✓' : annual?.status === 'pending' ? '…' : annual?.status === 'overdue' ? '✗' : annual ? '○' : ''}
+                      <div className={`w-11 h-7 rounded flex items-center justify-center font-bold text-[10px] ${annual?.status === 'paid' ? 'bg-emerald-100 text-emerald-700' : annual?.status === 'pending' ? 'bg-amber-100 text-amber-700' : annual?.status === 'overdue' ? 'bg-red-100 text-red-700' : annual ? 'bg-slate-100 text-slate-500' : 'bg-slate-50 text-slate-300'}`}>
+                        {annual?.status === 'paid' ? (annual.payment && paidDateOf(annual.payment) ? toBnDigits(format(paidDateOf(annual.payment)!, 'dd/MM')) : '✓') : annual?.status === 'pending' ? '…' : annual?.status === 'overdue' ? '✗' : annual ? '○' : ''}
                       </div>
                     </td>
                   </tr>

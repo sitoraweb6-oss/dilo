@@ -5,7 +5,7 @@ import { CheckCircle2, Clock, AlertCircle, XCircle, FileSpreadsheet, ChevronDown
 import { db } from '../lib/firebase';
 import { Payment, PaymentSettings, UserProfile } from '../types';
 import {
-  buildMemberLedger, getPaymentCoverage, describePaymentBn, monthLabelBn, toBnDigits, toMonthKey, MonthLine,
+  buildMemberLedger, getPaymentCoverage, describePaymentBn, monthLabelBn, toBnDigits, toMonthKey, paidDateOf, MonthLine,
 } from '../lib/ledger';
 
 const taka = (n: number) => `৳${Math.round(n).toLocaleString('en-IN')}`;
@@ -94,6 +94,9 @@ export function MemberStatement({
           <p>অনুমোদিত {fmtDay(p.approvedAt) && `• ${fmtDay(p.approvedAt)}`} (অনুমোদনকারীর তথ্য নেই)</p>
         )}
         {p.isCopiedRecord && <p className="text-indigo-600">মাইগ্রেশন থেকে কপি করা রেকর্ড</p>}
+        {p.entryType === 'manual' && (
+          <p className="text-indigo-600">ম্যানুয়াল এন্ট্রি দিয়েছেন: {nameOf(p.enteredBy, p.enteredByName)}{p.receivedDate ? ` • টাকা গ্রহণ: ${p.receivedDate.split('-').reverse().join('/')}` : ''}</p>
+        )}
       </>
     );
   };
@@ -139,6 +142,8 @@ export function MemberStatement({
         'Method': p.paymentMethod || '',
         'Transaction ID': p.transactionId || '',
         'Status': p.status,
+        'Entry': p.entryType === 'manual' ? `Manual by ${nameOf(p.enteredBy, p.enteredByName)}` : 'Member',
+        'Received on': p.receivedDate || '',
         '1st approver': nameOf(p.firstApprovedBy, p.firstApprovedByName),
         '1st approved at': fmtTs(p.firstApprovedAt),
         '2nd approver': p.status === 'approved' ? nameOf(p.secondApprovedBy || p.approvedBy, p.secondApprovedByName) : '',
@@ -240,7 +245,7 @@ export function MemberStatement({
                           </div>
                           {l.payment && (
                             <div className="text-[10px] text-slate-500 mt-1 space-y-0.5">
-                              <p>জমা: {fmtTs(l.payment.submittedAt) || monthLabelBn(l.payment.month)}{l.payment.paymentMethod ? ` • ${l.payment.paymentMethod}` : ''}{l.payment.transactionId ? ` • ${l.payment.transactionId}` : ''}</p>
+                              <p>জমা: {l.payment.receivedDate ? fmtDay({ toDate: () => paidDateOf(l.payment!)! }) : (fmtTs(l.payment.submittedAt) || monthLabelBn(l.payment.month))}{l.payment.paymentMethod ? ` • ${l.payment.paymentMethod}` : ''}{l.payment.transactionId ? ` • ${l.payment.transactionId}` : ''}</p>
                               {approvalLine(l.payment)}
                             </div>
                           )}
@@ -274,7 +279,10 @@ export function MemberStatement({
                         : <Clock size={16} className="text-amber-500" />}
                     </span>
                     <div className="min-w-0">
-                      <p className="text-sm font-bold text-slate-800 leading-snug">{describePaymentBn(p)}</p>
+                      <p className="text-sm font-bold text-slate-800 leading-snug">
+                        {describePaymentBn(p)}
+                        {p.entryType === 'manual' && <span className="ml-1.5 align-middle text-[9px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">ম্যানুয়াল</span>}
+                      </p>
                       <p className="text-[10px] text-slate-500">
                         {slotLabel(p.nameId)} • জমা: {fmtTs(p.submittedAt) || monthLabelBn(p.month)}
                         {p.paymentMethod ? ` • ${p.paymentMethod}` : ''}{p.transactionId ? ` • ${p.transactionId}` : ''}

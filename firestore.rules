@@ -63,6 +63,7 @@ service cloud.firestore {
         newData().status == 'pending' &&
         isPositiveNumber(newData().amount) &&
         !newData().keys().hasAny([
+          'entryType', 'enteredBy', 'enteredByName',
           'firstApprovedBy', 'firstApprovedByName', 'firstApprovedAt',
           'secondApprovedBy', 'secondApprovedByName', 'secondApprovedAt',
           'approvedBy', 'approvedAt', 'rejectedBy', 'rejectedByName', 'rejectedAt', 'rejectReason',
@@ -109,9 +110,26 @@ service cloud.firestore {
       return isAdmin() && !isOwner && (toLevel1 || toApproved || toRejected);
     }
 
+    // অ্যাডমিনের ম্যানুয়াল এন্ট্রি: এন্ট্রিকারী অ্যাডমিনই ১ম অনুমোদন; অন্য অ্যাডমিন ২য় অনুমোদন দিলে যোগ হবে।
+    // নিজের নামে নিজে ম্যানুয়াল এন্ট্রি দেওয়া যাবে না।
+    function isValidManualEntry() {
+      return isAdmin() &&
+        newData().entryType == 'manual' &&
+        newData().enteredBy == request.auth.uid &&
+        newData().userId != request.auth.uid &&
+        newData().status == 'level_1_approved' &&
+        newData().firstApprovedBy == request.auth.uid &&
+        isPositiveNumber(newData().amount) &&
+        !newData().keys().hasAny([
+          'secondApprovedBy', 'secondApprovedByName', 'secondApprovedAt',
+          'approvedBy', 'approvedAt', 'rejectedBy', 'rejectedByName', 'rejectedAt', 'rejectReason',
+          'isCopiedRecord'
+        ]);
+    }
+
     match /payments/{paymentId} {
       allow read: if isAuthenticated();
-      allow create: if isValidPaymentCreate();
+      allow create: if isValidPaymentCreate() || isValidManualEntry();
       allow update: if isMemberPaymentEdit() || isAdminPaymentDecision();
       // অনুমোদিত পেমেন্ট কখনো মুছবে না; ভুল হলে সংশোধনী এন্ট্রি দিতে হবে
       allow delete: if isSuperAdmin() && resource.data.status != 'approved';
@@ -158,12 +176,23 @@ service cloud.firestore {
         newData().status == 'pending' &&
         newData().loggedBy == request.auth.uid &&
         isPositiveNumber(newData().amount);
-      // অনুমোদন/বাতিলের সময় অঙ্ক বদলানো যাবে না, নিজের জমা দেওয়া খরচ নিজে অনুমোদন নয়
-      allow update: if isAdmin() &&
-        resource.data.status == 'pending' &&
-        newData().status in ['approved', 'rejected'] &&
-        newData().amount == resource.data.amount &&
-        request.auth.uid != resource.data.get('loggedBy', '');
+      // দুই ধাপের অনুমোদন: যে খরচ জমা দিয়েছে সে ১ম অনুমোদন দিতে পারবে না,
+      // আর ১ম ও ২য় অনুমোদনকারী আলাদা হতে হবে। অঙ্ক বদলানো যাবে না।
+      allow update: if isAdmin() && newData().amount == resource.data.amount && (
+        (resource.data.status == 'pending' &&
+          newData().status == 'level_1_approved' &&
+          newData().firstApprovedBy == request.auth.uid &&
+          request.auth.uid != resource.data.get('loggedBy', '') &&
+          changedKeys().hasOnly(['status', 'firstApprovedBy', 'firstApprovedByName', 'firstApprovedAt'])) ||
+        (resource.data.status == 'level_1_approved' &&
+          newData().status == 'approved' &&
+          newData().approvedBy == request.auth.uid &&
+          request.auth.uid != resource.data.get('firstApprovedBy', '') &&
+          changedKeys().hasOnly(['status', 'approvedBy', 'approvedByName', 'approvedAt'])) ||
+        (resource.data.status in ['pending', 'level_1_approved'] &&
+          newData().status == 'rejected' &&
+          changedKeys().hasOnly(['status', 'approvedBy', 'approvedByName', 'approvedAt', 'rejectReason']))
+      );
       allow delete: if isSuperAdmin() && resource.data.status != 'approved';
     }
 

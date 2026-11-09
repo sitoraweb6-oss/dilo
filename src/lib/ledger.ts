@@ -155,6 +155,15 @@ export function getPaymentCoverage(p: Payment): PaymentCoverage {
   return { months: months.sort(), annualYears: [], perMonth, perAnnual };
 }
 
+/** When the money was paid: the admin-entered receive date for manual entries, else submission time. */
+export function paidDateOf(p: Payment): Date | null {
+  if (p.receivedDate) {
+    const d = new Date(p.receivedDate + 'T12:00:00');
+    if (!isNaN(d.getTime())) return d;
+  }
+  return p.submittedAt?.toDate ? p.submittedAt.toDate() : null;
+}
+
 export function isActivePaymentStatus(s: Payment['status']) {
   return s === 'approved' || s === 'pending' || s === 'level_1_approved';
 }
