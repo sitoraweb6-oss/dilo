@@ -7,14 +7,13 @@ import { Search, Filter, ShieldCheck, ChevronRight } from 'lucide-react';
 import { MemberProfileModal } from '../../components/MemberProfileModal';
 import { format } from 'date-fns';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { getMemberStatus, getMemberTotalSavings } from '../../lib/paymentUtils';
+import { getMemberTotalSavings } from '../../lib/paymentUtils';
+import { useAllLedgers } from '../../lib/useLedger';
 import { useAuth } from '../../lib/AuthContext';
 
 export function MembersTab() {
   const { userProfile } = useAuth();
-  const [members, setMembers] = useState<UserProfile[]>([]);
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { members, payments, ledgers, loading } = useAllLedgers();
   const [searchTerm, setSearchTerm] = useState('');
   const location = useLocation();
   const [filter, setFilter] = useState<'all' | 'paid' | 'pending' | 'due'>((location.state?.filter as any) || 'all');
@@ -29,46 +28,25 @@ export function MembersTab() {
 
   const currentMonth = format(new Date(), 'yyyy-MM');
 
-  useEffect(() => {
-    let isMounted = true;
-    const fetchData = async () => {
-      try {
-        const q1 = query(collection(db, 'payments'), where('month', '==', currentMonth));
-        const q2 = query(collection(db, 'payments'), where('coveredMonthsList', 'array-contains', currentMonth));
-        const [membersSnap, snap1, snap2] = await Promise.all([
-          getDocs(query(collection(db, 'users'), where('status', '==', 'active'))),
-          getDocs(q1),
-          getDocs(q2)
-        ]);
-        
-        if (!isMounted) return;
-        
-        setMembers(membersSnap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile)));
-        const paymentsMap = new Map();
-        snap1.docs.forEach(doc => paymentsMap.set(doc.id, { id: doc.id, ...doc.data() } as Payment));
-        snap2.docs.forEach(doc => paymentsMap.set(doc.id, { id: doc.id, ...doc.data() } as Payment));
-        setPayments(Array.from(paymentsMap.values()));
-        setLoading(false);
-      } catch (e) {
-        console.error(e);
-        if (isMounted) setLoading(false);
-      }
-    };
-    fetchData();
-    return () => { isMounted = false; };
-  }, [currentMonth]);
-
-
+  const ledgerOf = (id: string) => ledgers.find(l => l.member.id === id);
+  type RowStatus = 'due' | 'pending' | 'clear';
+  const rowStatus = (m: UserProfile): RowStatus => {
+    const l = ledgerOf(m.id);
+    if (!l) return 'clear';
+    if (l.hasDues) return 'due';
+    if (l.pendingCount > 0) return 'pending';
+    return 'clear';
+  };
 
   const filteredMembers = members.filter(m => {
     const matchesSearch = m.displayName.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           m.id.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           (m.personalMobile && m.personalMobile.includes(searchTerm));
     if (!matchesSearch) return false;
-    const status = getMemberStatus(m, payments, currentMonth);
-    if (filter === 'paid' && status !== 'approved') return false;
+    const status = rowStatus(m);
+    if (filter === 'paid' && status !== 'clear') return false;
     if (filter === 'pending' && status !== 'pending') return false;
-    if (filter === 'due' && status !== 'not_submitted') return false;
+    if (filter === 'due' && status !== 'due') return false;
     return true;
   });
 
@@ -79,17 +57,24 @@ export function MembersTab() {
     const bIsAdmin = String(b.role).toLowerCase() === 'admin' || String(b.role).toLowerCase() === 'super_admin';
     if (aIsAdmin && !bIsAdmin) return -1;
     if (!aIsAdmin && bIsAdmin) return 1;
-    const statusOrder = { not_submitted: 0, pending: 1, partial: 2, approved: 3 };
-    const statusA = getMemberStatus(a, payments, currentMonth);
-    const statusB = getMemberStatus(b, payments, currentMonth);
-    return statusOrder[statusA] - statusOrder[statusB];
+    const statusOrder = { due: 0, pending: 1, clear: 2 };
+    const diff = statusOrder[rowStatus(a)] - statusOrder[rowStatus(b)];
+    if (diff !== 0) return diff;
+    return (ledgerOf(b.id)?.dueAmount || 0) - (ledgerOf(a.id)?.dueAmount || 0);
   });
 
-  const getStatusBadge = (status: string) => {
-    if (status === 'approved') return <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] font-bold">সম্পূর্ণ পরিশোধিত</span>;
-    if (status === 'partial') return <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">আংশিক পরিশোধিত</span>;
-    if (status === 'pending') return <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">অপেক্ষমাণ</span>;
-    return <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-[10px] font-bold">বকেয়া</span>;
+  const getStatusBadge = (m: UserProfile) => {
+    const l = ledgerOf(m.id);
+    const st = rowStatus(m);
+    if (st === 'due' && l) {
+      return (
+        <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-[10px] font-bold">
+          বকেয়া ৳{l.dueAmount.toLocaleString('en-IN')}{l.overdueMonths > 0 ? ` (${l.overdueMonths} মাস)` : ''}
+        </span>
+      );
+    }
+    if (st === 'pending') return <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">অপেক্ষমাণ</span>;
+    return <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded text-[10px] font-bold">হালনাগাদ</span>;
   };
 
   if (loading) {
@@ -127,7 +112,7 @@ export function MembersTab() {
             onClick={() => setFilter('paid')}
             className={`px-4 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-colors ${filter === 'paid' ? 'bg-emerald-600 text-white' : 'bg-white border border-emerald-200 text-emerald-700'}`}
           >
-            পরিশোধিত
+            হালনাগাদ
           </button>
           <button 
             onClick={() => setFilter('pending')}
@@ -188,7 +173,7 @@ export function MembersTab() {
                 </div>
 
                 <div className="text-right">
-                  {getStatusBadge(getMemberStatus(member, payments, currentMonth))}
+                  {getStatusBadge(member)}
                   <p className="text-[10px] text-slate-400 mt-1">
                     {member.createdAt ? format(member.createdAt.toDate(), 'MMM yyyy') : 'N/A'}
                   </p>

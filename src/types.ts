@@ -68,8 +68,14 @@ export interface Payment {
   baseAmount?: number;
   paymentMethod?: string;
   transactionId?: string;
-  paymentType?: 'monthly' | 'annual' | 'advance';
+  paymentType?: 'monthly' | 'annual' | 'advance' | 'combined';
+  /** months this payment pays for (YYYY-MM). `month` above is only the submission month. */
   coveredMonthsList?: string[];
+  /** per-month split of base + fine (new payments) */
+  monthBreakdown?: { month: string; baseAmount: number; lateFine: number }[];
+  /** annual contribution years this payment covers, e.g. ['2025', '2026'] */
+  annualYears?: string[];
+  annualAmount?: number;
   cashRecipientName?: string;
   senderBankAccountNumber?: string;
   senderBankAccountHolderName?: string;
@@ -192,6 +198,8 @@ export interface PaymentSettings {
   isAnnualPaymentEnabled?: boolean;
   annualAmount?: number;
   annualEligibleMonths?: string[];
+  /** YYYY-MM. Dues are counted from this month (super admin sets it). */
+  ledgerStartMonth?: string;
 }
 
 export interface ProfileChangeRequest {

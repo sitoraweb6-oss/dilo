@@ -10,16 +10,45 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
+    // অ্যাকাউন্ট active না হলে (pending/rejected/inactive) কোনো অ্যাডমিন ক্ষমতা নেই
+    function isActiveAccount() {
+      return userDoc().get('status', 'active') == 'active';
+    }
+
     function isAdmin() {
-      return isAuthenticated() && 
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) && (
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        isActiveAccount() && (
           userDoc().role in ['admin', 'super_admin', 'Admin', 'Super Admin', 'SUPER_ADMIN'] ||
           ('permissions' in userDoc() && (
             userDoc().permissions.hasAny(['admin', 'super_admin', 'Admin', 'Super Admin'])
           ))
         );
     }
-    
+
+    function isSuperAdmin() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        isActiveAccount() && (
+          userDoc().role in ['super_admin', 'Super Admin', 'SUPER_ADMIN'] ||
+          ('permissions' in userDoc() && userDoc().permissions.hasAny(['super_admin', 'Super Admin']))
+        );
+    }
+
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // একজন ইউজার একবারই ভোট দিতে পারবে, অন্যের ভোট মুছতে পারবে না
+    function isOwnNewVote() {
+      let before = resource.data.get('votedUserIds', []);
+      let after = request.resource.data.votedUserIds;
+      return !(request.auth.uid in before) &&
+             request.auth.uid in after &&
+             after.hasAll(before) &&
+             after.size() == before.size() + 1;
+    }
+
     function isMemberUpdate(paymentId) {
       let isOwner = request.auth.uid == resource.data.userId;
       let isPending = resource.data.status == 'pending';
@@ -53,10 +82,19 @@ service cloud.firestore {
 
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == userId;
+      // নতুন ইউজার শুধু member + pending_approval হিসেবেই ঢুকতে পারবে
+      allow create: if isAuthenticated() && request.auth.uid == userId &&
+        request.resource.data.role == 'member' &&
+        request.resource.data.status == 'pending_approval' &&
+        !('permissions' in request.resource.data);
       allow update: if isAuthenticated() && (
-        (request.auth.uid == userId && (!('role' in request.resource.data) || request.resource.data.role == resource.data.role)) ||
-        isAdmin()
+        // নিজের প্রোফাইল: role/permissions/status/slot নিজে বদলানো যাবে না
+        (request.auth.uid == userId &&
+          !changedKeys().hasAny(['role', 'permissions', 'status', 'names', 'migratedTo'])) ||
+        // অ্যাডমিন: সাধারণ আপডেট (approve, reject, slot ইত্যাদি)
+        (isAdmin() && !changedKeys().hasAny(['role', 'permissions'])) ||
+        // role বা permissions বদলাতে পারবে শুধু সুপার অ্যাডমিন
+        isSuperAdmin()
       );
       allow delete: if isAdmin();
     }
@@ -90,7 +128,11 @@ service cloud.firestore {
     match /polls/{pollId} {
       allow read: if isAuthenticated();
       allow create, delete: if isAdmin();
-      allow update: if isAuthenticated(); // Members can vote
+      allow update: if isAdmin() || (
+        isAuthenticated() && isActiveAccount() &&
+        changedKeys().hasOnly(['options', 'votedUserIds']) &&
+        isOwnNewVote()
+      );
     }
     
     match /activityLog/{logId} {
@@ -136,7 +178,10 @@ service cloud.firestore {
 
     match /settings/{settingId} {
       allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      // হিসাব শুরুর মাস (ledgerStartMonth) বদলাতে পারবে শুধু সুপার অ্যাডমিন
+      allow create: if isAdmin() && (!('ledgerStartMonth' in request.resource.data) || request.resource.data.ledgerStartMonth == null || isSuperAdmin());
+      allow update: if isAdmin() && (!changedKeys().hasAny(['ledgerStartMonth']) || isSuperAdmin());
+      allow delete: if isSuperAdmin();
     }
     
     match /adminRequests/{docId} {
@@ -157,7 +202,12 @@ service cloud.firestore {
     match /investments/{investmentId} {
       allow read: if isAuthenticated();
       allow create, delete: if isAdmin();
-      allow update: if isAuthenticated(); // Admins handle approval, Members handle voting
+      allow update: if isAdmin() || (
+        isAuthenticated() && isActiveAccount() &&
+        changedKeys().hasOnly(['votedUserIds', 'totalVotes', 'approveVotes', 'rejectVotes', 'opinions']) &&
+        isOwnNewVote() &&
+        request.resource.data.totalVotes == resource.data.get('totalVotes', 0) + 1
+      );
     }
     match /investmentTransactions/{txnId} {
       allow read: if isAuthenticated();

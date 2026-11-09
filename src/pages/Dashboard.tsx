@@ -5,7 +5,7 @@ import { motion } from 'motion/react';
 import { Users, Wallet, Bell, LayoutDashboard, LogOut } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useCurrentMonthPayments } from '../lib/useCurrentMonthPayments';
-import { getMemberSlotSummary } from '../lib/paymentUtils';
+import { useMemberLedger } from '../lib/useLedger';
 import { AlertCircle } from 'lucide-react';
 // Placeholders for sub-pages
 import { HomeTab } from './tabs/HomeTab';
@@ -22,9 +22,9 @@ export function Dashboard() {
    
 
   const { currentMonthPayments, currentMonth } = useCurrentMonthPayments();
-  const slotSummary = userProfile ? getMemberSlotSummary(userProfile, currentMonthPayments, currentMonth) : null;
-  const paymentStatus = slotSummary ? slotSummary.status : 'approved';
-  const totalDue = slotSummary ? slotSummary.totalDueAmount : 0;
+  const { ledger: myLedger, settings: paySettings } = useMemberLedger(userProfile);
+  const hasDues = !!myLedger?.hasDues;
+  const totalDue = myLedger?.dueAmount || 0;
   const location = useLocation();
   const [activeTab, setActiveTab] = useState<'home' | 'personal' | 'notices' | 'members' | 'reports'>((location.state?.tab as any) || 'home');
 
@@ -70,7 +70,7 @@ export function Dashboard() {
       {/* Main Content Area */}
       <main className="flex-1 p-4 pb-28 max-w-2xl mx-auto w-full">
         
-        {(paymentStatus === 'not_submitted' || paymentStatus === 'partial') && activeTab === 'home' && (
+        {hasDues && activeTab === 'home' && (
           <motion.div 
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -80,10 +80,10 @@ export function Dashboard() {
             <div className="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-3">
               <AlertCircle size={28} />
             </div>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-red-500 mb-1">চলতি মাসের বকেয়া সঞ্চয়</p>
-            <h3 className="text-red-900 font-black text-2xl mb-1">৳{totalDue}</h3>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-red-500 mb-1">{myLedger && myLedger.overdueMonths > 0 ? `মোট বকেয়া (${myLedger.overdueMonths} মাস বাকি পড়েছে)` : 'চলতি মাসের বকেয়া সঞ্চয়'}</p>
+            <h3 className="text-red-900 font-black text-2xl mb-1">৳{totalDue.toLocaleString('en-IN')}</h3>
             <div className="flex items-center gap-1.5 text-xs text-red-700 font-medium mb-4 bg-red-100/50 px-3 py-1 rounded-full">
-              <Clock size={12} /> জমার শেষ সময়: প্রতি মাসের ২৫ তারিখ
+              <Clock size={12} /> জমার শেষ সময়: প্রতি মাসের {paySettings.dueDate} তারিখ
             </div>
             <button
               onClick={() => setActiveTab('personal')}

@@ -1,3 +1,4 @@
+import { toMonthKey } from '../../lib/ledger';
 import React, { useState } from 'react';
 import { db } from '../../lib/firebase';
 import { doc, updateDoc, addDoc, serverTimestamp, runTransaction, collection } from 'firebase/firestore';
@@ -63,7 +64,8 @@ export const PendingAdminRequestItem: React.FC<{ request: AdminRequest, currentU
               const newNames = request.metadata.requestedSlotNames.map(name => ({
                 nameId: `slot_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
                 label: name,
-                monthlyDue: request.metadata.monthlyDuePerSlot || 1000
+                monthlyDue: request.metadata.monthlyDuePerSlot || 1000,
+                activeFromMonth: toMonthKey(new Date())
               }));
               transaction.update(userRef, { names: [...currentNames, ...newNames] });
             }

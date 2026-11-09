@@ -5,6 +5,7 @@ import { Payment, UserProfile } from '../../types';
 import { useCurrentMonthPayments } from '../../lib/useCurrentMonthPayments';
 import { collection, query, where, orderBy, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { describePaymentBn } from '../../lib/ledger';
 import { format } from 'date-fns';
 
 interface MemberModalProps {
@@ -142,7 +143,7 @@ export function MemberModal({ member, onClose }: MemberModalProps) {
                         </div>
                         <div>
                           <p className="text-sm font-medium text-slate-700">
-                            {format(new Date(payment.month + '-01'), 'MMMM yyyy')}
+                            {describePaymentBn(payment)}
                           </p>
                           <p className="text-xs text-slate-400">অনুমোদিত</p>
                         </div>

@@ -4,6 +4,8 @@ import { UserProfile, Payment } from '../types';
 import { X, ShieldCheck, CheckCircle2, Clock, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { getMemberSlotSummary } from '../lib/paymentUtils';
+import { buildMemberLedger, describePaymentBn, monthListLabelBn } from '../lib/ledger';
+import { usePaymentSettings } from '../lib/usePaymentSettings';
 import { db } from '../lib/firebase';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
@@ -18,6 +20,7 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
   const { userProfile, isAdmin } = useAuth();
+  const { settings } = usePaymentSettings();
   const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -54,8 +57,8 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
   const currentMonth = format(new Date(), 'yyyy-MM');
   const totalSavings = payments.filter(p => p.status === 'approved').reduce((sum, p) => sum + p.amount, 0);
   
-  const currentMonthPayments = payments.filter(p => p.month === currentMonth);
-  const slotSummary = getMemberSlotSummary(member, currentMonthPayments, currentMonth);
+  const slotSummary = getMemberSlotSummary(member, payments, currentMonth);
+  const ledger = buildMemberLedger(member, payments, settings);
 
   return (
     <AnimatePresence>
@@ -189,6 +192,24 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
                     <p className="font-bold text-amber-700">{slotSummary.pendingSlots}</p>
                   </div>
                 </div>
+                <div className={`mt-3 p-3 rounded-xl text-sm ${ledger.hasDues ? 'bg-red-50 text-red-800' : 'bg-emerald-50 text-emerald-800'}`}>
+                  {ledger.hasDues ? (
+                    <>
+                      <p className="font-bold">মোট বকেয়া: ৳{ledger.dueAmount.toLocaleString('en-IN')}</p>
+                      {ledger.slots.filter(s => s.dueAmount > 0).map(s => {
+                        const dueMonths = s.months.filter(l => l.status === 'overdue' || l.status === 'current').map(l => l.month);
+                        const dueYears = s.annual.filter(a => a.status === 'overdue').map(a => a.year);
+                        return (
+                          <p key={s.slot.nameId} className="text-xs mt-1">
+                            {s.slot.label}: {dueMonths.length ? monthListLabelBn(dueMonths) : ''}{dueYears.length ? ` • বার্ষিক ${dueYears.join(', ')}` : ''}
+                          </p>
+                        );
+                      })}
+                    </>
+                  ) : (
+                    <p className="font-bold">কোনো বকেয়া নেই</p>
+                  )}
+                </div>
               </div>
             </div>
             <div>
@@ -210,7 +231,7 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
                            payment.status === 'rejected' ? <AlertCircle size={16} /> : <Clock size={16} />}
                         </div>
                         <div>
-                          <p className="text-sm font-bold text-slate-800">{format(new Date(payment.month + '-01'), 'MMMM yyyy')}</p>
+                          <p className="text-sm font-bold text-slate-800">{describePaymentBn(payment)}</p>
                           <p className="text-[10px] text-slate-500">
                             {payment.status === 'approved' ? 'অনুমোদিত' :
                              payment.status === 'rejected' ? 'বাতিল' : 'পেন্ডিং'}
