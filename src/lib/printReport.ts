@@ -32,10 +32,10 @@ function shell(title: string, body: string, landscape = false) {
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  @page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 12mm; }
+  @page { size: A4 portrait; margin: 10mm 9mm; }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body { font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Nirmala UI', 'Vrinda', sans-serif; color: #0f172a; margin: 0; font-size: 11.5px; line-height: 1.45; }
-  .wrap { max-width: ${landscape ? '1100px' : '780px'}; margin: 0 auto; padding: 16px; }
+  body { font-family: 'Hind Siliguri', 'Noto Sans Bengali', 'Nirmala UI', 'Vrinda', sans-serif; color: #0f172a; margin: 0; font-size: 12.5px; line-height: 1.4; }
+  .wrap { max-width: 780px; margin: 0 auto; padding: 16px; }
   header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #0b4f4a; padding-bottom: 10px; margin-bottom: 14px; }
   .brand { font-size: 22px; font-weight: 700; color: #0b4f4a; }
   .brand small { display: block; font-size: 12px; color: #475569; font-weight: 500; }
@@ -55,13 +55,15 @@ function shell(title: string, body: string, landscape = false) {
   .due { background: #fee2e2; color: #991b1b; } .muted { color: #94a3b8; }
   .man { background: #e0e7ff; color: #3730a3; }
   .small { font-size: 9.5px; color: #64748b; }
-  .grid td, .grid th { text-align: center; padding: 3px 2px; font-size: 9.5px; }
+  .grid td, .grid th { text-align: center; padding: 3px 1px; font-size: 10.5px; }
   .grid td.name, .grid th.name { text-align: left; padding-left: 6px; white-space: nowrap; }
   .cell { display: block; border-radius: 3px; padding: 2px 0; font-weight: 600; }
   tfoot td { font-weight: 700; background: #f1f5f9 !important; border-top: 2px solid #0b4f4a; }
-  .sign { display: flex; justify-content: space-between; margin-top: 40px; }
+  .sign { display: flex; justify-content: space-between; margin-top: 36px; break-inside: avoid; }
   .sign div { width: 30%; border-top: 1px solid #334155; text-align: center; padding-top: 4px; color: #475569; }
   .note { color: #64748b; font-size: 10px; margin-top: 6px; }
+  /* print: use the full page width so nothing gets shrunk and pages stay full */
+  @media print { .wrap { max-width: none; width: 100%; padding: 0; margin: 0; box-shadow: none; } thead { display: table-header-group; } tr { break-inside: avoid; } h2 { break-after: avoid; } }
   @media screen { body { background: #e2e8f0; } .wrap { background: #fff; margin: 16px auto; box-shadow: 0 2px 12px rgba(0,0,0,.08); } }
   .avoid { break-inside: avoid; }
 </style></head><body><div class="wrap">${body}</div>
@@ -182,7 +184,7 @@ export function printMonthlyReport(month: string, d: ReportData) {
     <table><thead><tr><th>#</th><th>সদস্য</th><th>স্লট</th><th>অবস্থা</th><th class="num">চাঁদা</th><th class="num">জরিমানা</th><th>জমার তারিখ</th><th>মাধ্যম</th><th>অনুমোদন</th></tr></thead>
     <tbody>${body}</tbody></table>
 
-    <h2 class="avoid">বর্তমান বকেয়া তালিকা (সব মাস মিলিয়ে)</h2>
+    <h2>বর্তমান বকেয়া তালিকা (সব মাস মিলিয়ে)</h2>
     ${duesTable(d.ledgers)}
     ${signBlock}
   `);
@@ -214,13 +216,17 @@ export function printYearlyReport(year: string, d: ReportData) {
     .filter(e => (e as any).status === 'approved' && String(e.date || '').startsWith(year))
     .reduce((t, e) => t + (e.amount || 0), 0);
 
-  // year grid with paid dates
+  // year grid: only months that have any slot or collection, so columns stay readable
+  const gridMonths = months.filter(m =>
+    d.ledgers.some(l => l.slots.some(s => [...s.months, ...s.upcoming].some(x => x.month === m && x.status !== 'upcoming'))) ||
+    (byMonth.get(m)?.base || 0) > 0
+  );
   const gridRows = d.ledgers
     .slice().sort((a, b) => a.member.displayName.localeCompare(b.member.displayName))
     .flatMap(l => l.slots.map(s => {
       const all = [...s.months, ...s.upcoming];
       let rowTotal = 0;
-      const cells = months.map(m => {
+      const cells = gridMonths.map(m => {
         const line = all.find(x => x.month === m);
         if (!line) return '<td></td>';
         if (line.status === 'paid' && line.payment) {
@@ -254,11 +260,11 @@ export function printYearlyReport(year: string, d: ReportData) {
     <tfoot><tr><td>মোট</td><td class="num">${tk(totExp)}</td><td class="num">${tk(totBase)}</td><td class="num">${tk(totFine)}</td><td colspan="3"></td></tr></tfoot></table>
 
     <h2>বার্ষিক ছক (ঘরে জমার তারিখ)</h2>
-    <table class="grid"><thead><tr><th class="name">সদস্য</th>${BN_SHORT.map(m => `<th>${m}</th>`).join('')}<th>বার্ষিক</th><th class="num">মোট</th></tr></thead>
+    <table class="grid"><thead><tr><th class="name">সদস্য</th>${gridMonths.map(m => `<th>${BN_SHORT[Number(m.slice(5)) - 1]}</th>`).join('')}<th>বার্ষিক</th><th class="num">মোট</th></tr></thead>
     <tbody>${gridRows}</tbody></table>
     <p class="note">ঘরের তারিখ = যেদিন টাকা জমা হয়েছে (দিন/মাস) • … অপেক্ষমাণ • ✗ বকেয়া • ○ এ বছরে দিতে হবে • * ম্যানুয়াল এন্ট্রি</p>
 
-    <h2 class="avoid">বর্তমান বকেয়া তালিকা</h2>
+    <h2>বর্তমান বকেয়া তালিকা</h2>
     ${duesTable(d.ledgers)}
     ${signBlock}
   `, true);
