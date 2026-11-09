@@ -13,7 +13,7 @@ import { MemberStatement } from '../../components/MemberStatement';
 import { Copy, PlusCircle, Edit2 } from 'lucide-react';
 import {
   buildMemberLedger, getPaymentCoverage, isActivePaymentStatus, monthLabelBn, monthListLabelBn,
-  toBnDigits, toMonthKey, describePaymentBn, MonthLine,
+  toBnDigits, toMonthKey, describePaymentBn, MonthLine, normalizeLegacyPayments,
 } from '../../lib/ledger';
 
 const taka = (n: number) => `৳${Math.round(n).toLocaleString('en-IN')}`;
@@ -86,9 +86,14 @@ export function PersonalTab() {
     return () => { isMounted = false; };
   }, [userProfile]);
 
-  const ledger = useMemo(
-    () => (userProfile ? buildMemberLedger(userProfile, payments, settings) : null),
+  // old records: extra money moved to earlier unpaid months (see normalizeLegacyPayments)
+  const myPayments = useMemo(
+    () => (userProfile ? normalizeLegacyPayments(payments, [userProfile], settings) : payments),
     [userProfile, payments, settings]
+  );
+  const ledger = useMemo(
+    () => (userProfile ? buildMemberLedger(userProfile, myPayments, settings) : null),
+    [userProfile, myPayments, settings]
   );
 
   if (!userProfile || !ledger) return null;
@@ -136,7 +141,7 @@ export function PersonalTab() {
   };
 
   // ---- savings summary (own records, fines included) ----
-  const approvedPayments = payments.filter(p => p.status === 'approved');
+  const approvedPayments = myPayments.filter(p => p.status === 'approved');
   let monthlyTotal = 0, lateFeeTotal = 0, annualTotal = 0;
   approvedPayments.forEach(p => {
     const cov = getPaymentCoverage(p);
@@ -194,7 +199,7 @@ export function PersonalTab() {
       // Re-check from the server so the same month can't be submitted twice (double tap / two devices)
       const fresh = await fetchMyPayments(userProfile.id);
       const taken = new Set<string>();
-      fresh.filter(p => p.nameId === activeSlot.nameId && isActivePaymentStatus(p.status)).forEach(p => {
+      normalizeLegacyPayments(fresh, [userProfile], settings).filter(p => p.nameId === activeSlot.nameId && isActivePaymentStatus(p.status)).forEach(p => {
         const cov = getPaymentCoverage(p);
         cov.months.forEach(m => taken.add(m));
         cov.annualYears.forEach(y => taken.add(`annual-${y}`));
@@ -380,32 +385,7 @@ export function PersonalTab() {
               </div>
             )}
 
-            {/* Month-by-month status, current year */}
-            <div className="mb-5">
-              <p className="text-xs font-bold text-slate-500 mb-2 flex items-center gap-1.5"><CalendarCheck size={14} /> মাসভিত্তিক হিসাব ({toBnDigits(today.getFullYear())})</p>
-              <div className="grid grid-cols-4 gap-1.5">
-                {[...slotLedger.months, ...slotLedger.upcoming]
-                  .filter(l => l.month.startsWith(String(today.getFullYear())))
-                  .map(l => {
-                    const cls =
-                      l.status === 'paid' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : l.status === 'pending' ? 'bg-amber-50 text-amber-700 border-amber-200'
-                      : l.status === 'overdue' ? 'bg-red-50 text-red-700 border-red-200'
-                      : l.status === 'current' ? 'bg-orange-50 text-orange-700 border-orange-200'
-                      : 'bg-slate-50 text-slate-400 border-slate-100';
-                    const label =
-                      l.status === 'paid' ? 'পরিশোধিত' : l.status === 'pending' ? 'অপেক্ষমাণ'
-                      : l.status === 'overdue' ? 'বকেয়া' : l.status === 'current' ? 'চলতি' : '—';
-                    return (
-                      <div key={l.month} className={`border rounded-lg py-1.5 text-center ${cls}`}>
-                        <p className="text-[11px] font-bold leading-tight">{monthLabelBn(l.month, false)}</p>
-                        <p className="text-[9px] mt-0.5">{label}</p>
-                      </div>
-                    );
-                  })}
-              </div>
-              <p className="text-[10px] text-slate-400 mt-2">হিসাব শুরু: {monthLabelBn(slotLedger.startMonth)}</p>
-            </div>
+            <p className="text-[11px] text-slate-400 mb-4 -mt-1 text-center">হিসাব শুরু: {monthLabelBn(slotLedger.startMonth)} • মাসভিত্তিক বিস্তারিত নিচে "আমার হিসাব বিবরণী"-তে</p>
 
             {/* ---- Payment form ---- */}
             {dueLines.length === 0 && annualLines.length === 0 && advanceLines.length === 0 ? null : (
@@ -665,7 +645,7 @@ export function PersonalTab() {
       {/* Full statement: totals, month-by-month, every transaction with approvals */}
       <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
         <h2 className="font-heading font-bold text-slate-800 text-lg mb-4">আমার হিসাব বিবরণী</h2>
-        <MemberStatement member={userProfile} payments={payments} settings={settings} />
+        <MemberStatement member={userProfile} payments={myPayments} settings={settings} showSummary={false} />
       </div>
 
     </div>

@@ -3,7 +3,7 @@ import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from './firebase';
 import { Payment, UserProfile } from '../types';
 import { usePaymentSettings } from './usePaymentSettings';
-import { buildMemberLedger, MemberLedger } from './ledger';
+import { buildMemberLedger, MemberLedger, normalizeLegacyPayments } from './ledger';
 
 /** Ledger for a single member (own dues, profile modal, dashboard banner). */
 export function useMemberLedger(member: UserProfile | null | undefined) {
@@ -54,10 +54,11 @@ export function useAllLedgers() {
     return () => { alive = false; };
   }, []);
 
+  const normalized = useMemo(() => normalizeLegacyPayments(payments, members, settings), [payments, members, settings]);
   const ledgers: MemberLedger[] = useMemo(
-    () => members.map(m => buildMemberLedger(m, payments, settings)),
-    [members, payments, settings]
+    () => members.map(m => buildMemberLedger(m, normalized, settings)),
+    [members, normalized, settings]
   );
 
-  return { members, payments, ledgers, settings, loading: loading || settingsLoading };
+  return { members, payments: normalized, ledgers, settings, loading: loading || settingsLoading };
 }

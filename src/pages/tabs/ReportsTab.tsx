@@ -14,7 +14,7 @@ import {
 import { MemberStatement } from '../../components/MemberStatement';
 import { printMonthlyReport, printYearlyReport } from '../../lib/printReport';
 import { useAuth } from '../../lib/AuthContext';
-import { paidDateOf } from '../../lib/ledger';
+import { paidDateOf, normalizeLegacyPayments } from '../../lib/ledger';
 import { MessageCircle } from 'lucide-react';
 
 const BN_SHORT = ['জানু', 'ফেব্রু', 'মার্চ', 'এপ্রি', 'মে', 'জুন', 'জুলা', 'আগ', 'সেপ্টে', 'অক্টো', 'নভে', 'ডিসে'];
@@ -28,7 +28,7 @@ const STATUS_EN: Record<MonthLine['status'], string> = {
 
 export function ReportsTab() {
   const { settings, loading: settingsLoading } = usePaymentSettings();
-  const [payments, setPayments] = useState<Payment[]>([]);
+  const [rawPayments, setPayments] = useState<Payment[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [investmentTxns, setInvestmentTxns] = useState<InvestmentTransaction[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
@@ -69,6 +69,8 @@ export function ReportsTab() {
   }, []);
 
   const activeMembers = useMemo(() => allUsers.filter(m => m.status === 'active'), [allUsers]);
+  // old records: extra money moved to earlier unpaid months (see normalizeLegacyPayments)
+  const payments = useMemo(() => normalizeLegacyPayments(rawPayments, allUsers, settings), [rawPayments, allUsers, settings]);
   const ledgers: MemberLedger[] = useMemo(
     () => activeMembers.map(m => buildMemberLedger(m, payments, settings)),
     [activeMembers, payments, settings]
