@@ -245,6 +245,7 @@ export function PersonalTab() {
         selectedYears.length ? `${selectedYears.map(toBnDigits).join(', ')} সালের বার্ষিক` : '',
       ].filter(Boolean).join(' এবং ');
       await addDoc(collection(db, 'activityLog'), {
+        actorId: userProfile.id,
         description: `${userProfile.displayName} (${activeSlot.label}) ${what} চাঁদা বাবদ ${taka(grandTotal)} জমা দিয়েছেন।`,
         timestamp: serverTimestamp(),
       });

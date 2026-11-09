@@ -91,6 +91,7 @@ export function VerifyPin() {
       if (newAttempts === 15 && !lockData.hasLogged15 && userProfile) {
         try {
           await addDoc(collection(db, 'activityLog'), {
+            actorId: firebaseUser.uid,
             description: `⚠️ ${userProfile.displayName} ১৫ বার ধারাবাহিকভাবে ভুল PIN প্রদান করেছেন।`,
             memberUid: userProfile.id,
             memberName: userProfile.displayName,

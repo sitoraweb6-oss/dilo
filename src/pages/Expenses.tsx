@@ -58,6 +58,7 @@ export function Expenses() {
         createdAt: serverTimestamp()
       });
       await addDoc(collection(db, 'activityLog'), {
+        actorId: userProfile.id,
         description: `${userProfile.displayName} ৳${amount} এর একটি খরচের হিসাব জমা দিয়েছেন`,
         timestamp: serverTimestamp(),
       });
@@ -85,6 +86,7 @@ export function Expenses() {
         approvedAt: serverTimestamp()
       });
       await addDoc(collection(db, 'activityLog'), {
+        actorId: userProfile?.id,
         description: `${userProfile?.displayName} ৳${expense.amount} এর খরচটি অনুমোদন করেছেন`,
         timestamp: serverTimestamp(),
       });
@@ -114,6 +116,7 @@ export function Expenses() {
         approvedAt: serverTimestamp()
       });
       await addDoc(collection(db, 'activityLog'), {
+        actorId: userProfile?.id,
         description: `${userProfile?.displayName} ৳${expense.amount} এর খরচটি বাতিল করেছেন`,
         timestamp: serverTimestamp(),
       });

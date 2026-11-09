@@ -5,7 +5,8 @@ import { db } from '../../lib/firebase';
 import { doc, updateDoc, addDoc, collection, serverTimestamp, writeBatch, runTransaction } from 'firebase/firestore';
 import { Payment, UserProfile } from '../../types';
 import { CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
-import { describePaymentBn, getPaymentCoverage, monthLabelBn } from '../../lib/ledger';
+import { describePaymentBn, getPaymentCoverage, monthLabelBn, lateFineFor, toMonthKey } from '../../lib/ledger';
+import { usePaymentSettings } from '../../lib/usePaymentSettings';
 import { format } from 'date-fns';
 import { sendPushNotificationToUsers } from '../../lib/pushNotifications';
 
@@ -18,6 +19,7 @@ export const PendingMemberItem: React.FC<{ member: UserProfile, currentUser: Use
       setLoading(true);
       await updateDoc(doc(db, 'users', member.id), { status: 'active', role: isAdmin ? role : 'member' });
       await addDoc(collection(db, 'activityLog'), {
+        actorId: currentUser.id,
         description: `${currentUser.displayName} নতুন সদস্য ${member.displayName}-কে অনুমোদন দিয়েছেন`,
         timestamp: serverTimestamp(),
       });
@@ -33,6 +35,7 @@ export const PendingMemberItem: React.FC<{ member: UserProfile, currentUser: Use
       setLoading(true);
       await updateDoc(doc(db, 'users', member.id), { status: 'rejected' });
       await addDoc(collection(db, 'activityLog'), {
+        actorId: currentUser.id,
         description: `${currentUser.displayName} নতুন সদস্য ${member.displayName}-এর অনুরোধ বাতিল করেছেন`,
         timestamp: serverTimestamp(),
       });
@@ -95,6 +98,18 @@ export const PendingMemberItem: React.FC<{ member: UserProfile, currentUser: Use
 
 export const PendingPaymentItem: React.FC<{ payment: Payment, user?: UserProfile, currentUser: UserProfile, usersMap?: Record<string, UserProfile>, onComplete?: () => void }> = ({ payment, user, currentUser, usersMap, onComplete }) => {
   const isAdmin = hasPermission(currentUser, 'admin');
+  const { settings: paySettings } = usePaymentSettings();
+
+  // The member's phone decides the fine at submission time. Re-check it against the
+  // server timestamp so a wrong phone date can't be used to skip a fine.
+  const fineWarning = (() => {
+    const submitted = payment.submittedAt?.toDate ? payment.submittedAt.toDate() : null;
+    if (!submitted || !payment.monthBreakdown?.length) return null;
+    const expected = payment.monthBreakdown.reduce((s, b) => s + lateFineFor(b.month, paySettings, submitted), 0);
+    const charged = payment.monthBreakdown.reduce((s, b) => s + (b.lateFine || 0), 0);
+    if (expected === charged) return null;
+    return { expected, charged, submittedMonth: toMonthKey(submitted), declaredMonth: payment.month };
+  })();
   
   const [loading, setLoading] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -246,6 +261,13 @@ export const PendingPaymentItem: React.FC<{ payment: Payment, user?: UserProfile
           {describePaymentBn(payment)} • ৳{payment.amount}
         </p>
         <div className="mt-1 text-[10px] text-slate-600 space-y-0.5">
+          {fineWarning && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-2 my-1 text-[11px] font-medium">
+              ⚠️ জরিমানা মিলছে না: জমার সার্ভার-সময় অনুযায়ী জরিমানা হওয়ার কথা ৳{fineWarning.expected}, কিন্তু ধরা হয়েছে ৳{fineWarning.charged}।
+              {fineWarning.submittedMonth !== fineWarning.declaredMonth && ' (মেম্বারের ফোনের তারিখ ভুল থাকতে পারে)'}
+              {' '}টাকা যাচাই করে প্রয়োজনে বাতিল করুন।
+            </div>
+          )}
           <p><strong>স্লট:</strong> {user?.names?.find(n => n.nameId === payment.nameId)?.label || payment.nameId}</p>
           <p><strong>Member ID:</strong> {user?.id}</p>
           {getPaymentCoverage(payment).months.length > 0 && (

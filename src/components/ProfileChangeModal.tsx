@@ -93,6 +93,7 @@ export function ProfileChangeModal({ onClose }: { onClose: () => void }) {
       });
 
       await addDoc(collection(db, 'activityLog'), {
+        actorId: userProfile.id,
         description: `${userProfile.displayName} প্রোফাইল পরিবর্তনের অনুরোধ করেছেন`,
         timestamp: serverTimestamp(),
       });

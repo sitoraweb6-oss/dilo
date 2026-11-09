@@ -59,6 +59,7 @@ const PermissionsModal = ({
 
       if (logDesc) {
         await addDoc(collection(db, 'activityLog'), {
+          actorId: currentUser.id,
           description: logDesc,
           timestamp: serverTimestamp(),
         });

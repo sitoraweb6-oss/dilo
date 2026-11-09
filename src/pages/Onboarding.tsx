@@ -8,9 +8,11 @@ import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { motion } from 'motion/react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { format } from 'date-fns';
+import { usePaymentSettings } from '../lib/usePaymentSettings';
 import { Plus, Trash2 } from 'lucide-react';
 
 export function Onboarding() {
+  const { settings } = usePaymentSettings();
   const { firebaseUser, refreshProfile } = useAuth();
   const [step, setStep] = useState(1);
   const [displayName, setDisplayName] = useState(firebaseUser?.displayName || '');
@@ -83,7 +85,7 @@ export function Onboarding() {
     const names = slots.map(s => ({
       nameId: s.id,
       label: s.label,
-      monthlyDue: 1000,
+      monthlyDue: settings.monthlyFee || 1000,
       activeFromMonth: currentMonthString
     }));
 

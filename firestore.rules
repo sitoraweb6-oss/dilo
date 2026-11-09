@@ -1,44 +1,50 @@
 rules_version = '2';
 
+// Mithaq Firestore rules.
+// মনে রাখো: অ্যাপের কনফিগ পাবলিক, তাই লগইন করা যে কেউ অ্যাপ এড়িয়ে সরাসরি
+// ডাটাবেসে লিখতে পারে। এই রুলগুলোই একমাত্র পাহারাদার।
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions
+
+    // ---------------------------------------------------------------- helpers
     function isAuthenticated() {
       return request.auth != null;
+    }
+    function hasUserDoc() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
     function userDoc() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
-
-    // অ্যাকাউন্ট active না হলে (pending/rejected/inactive) কোনো অ্যাডমিন ক্ষমতা নেই
+    // অ্যাকাউন্ট active না হলে (pending/rejected/inactive) কোনো ক্ষমতা নেই
     function isActiveAccount() {
       return userDoc().get('status', 'active') == 'active';
     }
-
+    function isActiveMember() {
+      return isAuthenticated() && hasUserDoc() && isActiveAccount();
+    }
     function isAdmin() {
-      return isAuthenticated() &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        isActiveAccount() && (
-          userDoc().role in ['admin', 'super_admin', 'Admin', 'Super Admin', 'SUPER_ADMIN'] ||
-          ('permissions' in userDoc() && (
-            userDoc().permissions.hasAny(['admin', 'super_admin', 'Admin', 'Super Admin'])
-          ))
-        );
+      return isActiveMember() && (
+        userDoc().role in ['admin', 'super_admin', 'Admin', 'Super Admin', 'SUPER_ADMIN'] ||
+        ('permissions' in userDoc() && userDoc().permissions.hasAny(['admin', 'super_admin', 'Admin', 'Super Admin']))
+      );
     }
-
     function isSuperAdmin() {
-      return isAuthenticated() &&
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        isActiveAccount() && (
-          userDoc().role in ['super_admin', 'Super Admin', 'SUPER_ADMIN'] ||
-          ('permissions' in userDoc() && userDoc().permissions.hasAny(['super_admin', 'Super Admin']))
-        );
+      return isActiveMember() && (
+        userDoc().role in ['super_admin', 'Super Admin', 'SUPER_ADMIN'] ||
+        ('permissions' in userDoc() && userDoc().permissions.hasAny(['super_admin', 'Super Admin']))
+      );
     }
-
     function changedKeys() {
       return request.resource.data.diff(resource.data).affectedKeys();
     }
-
+    function newData() {
+      return request.resource.data;
+    }
+    function isPositiveNumber(v) {
+      return (v is int || v is float) && v > 0;
+    }
     // একজন ইউজার একবারই ভোট দিতে পারবে, অন্যের ভোট মুছতে পারবে না
     function isOwnNewVote() {
       let before = resource.data.get('votedUserIds', []);
@@ -49,44 +55,82 @@ service cloud.firestore {
              after.size() == before.size() + 1;
     }
 
-    function isMemberUpdate(paymentId) {
-      let isOwner = request.auth.uid == resource.data.userId;
-      let isPending = resource.data.status == 'pending';
-      let unchangedStatus = request.resource.data.status == resource.data.status;
-      let unchangedApproval = (!('firstApprovedBy' in resource.data) && !('firstApprovedBy' in request.resource.data)) ||
-                              (request.resource.data.firstApprovedBy == resource.data.firstApprovedBy);
-      let unchangedCore = request.resource.data.amount == resource.data.amount &&
-                          request.resource.data.month == resource.data.month &&
-                          request.resource.data.nameId == resource.data.nameId &&
-                          request.resource.data.paymentType == resource.data.paymentType;
-      return isOwner && isPending && unchangedStatus && unchangedApproval && unchangedCore;
+    // ---------------------------------------------------------------- payments
+    // মেম্বার শুধু নিজের নামে, pending অবস্থায়, অনুমোদনের কোনো ঘর ছাড়া পেমেন্ট জমা দিতে পারবে
+    function isValidPaymentCreate() {
+      return isActiveMember() &&
+        newData().userId == request.auth.uid &&
+        newData().status == 'pending' &&
+        isPositiveNumber(newData().amount) &&
+        !newData().keys().hasAny([
+          'firstApprovedBy', 'firstApprovedByName', 'firstApprovedAt',
+          'secondApprovedBy', 'secondApprovedByName', 'secondApprovedAt',
+          'approvedBy', 'approvedAt', 'rejectedBy', 'rejectedByName', 'rejectedAt', 'rejectReason',
+          'isCopiedRecord'
+        ]);
     }
 
-    function isAdminApproval(paymentId) {
-      let isOwner = request.auth.uid == resource.data.userId;
-      let statusChangedToLevel1 = resource.data.status == 'pending' && request.resource.data.status == 'level_1_approved';
-      let statusChangedToApproved = resource.data.status == 'level_1_approved' && request.resource.data.status == 'approved';
-      let statusChangedToRejected = request.resource.data.status == 'rejected';
-      
-      let validLevel1 = statusChangedToLevel1 && 
-                        request.resource.data.firstApprovedBy == request.auth.uid &&
-                        (!('secondApprovedBy' in request.resource.data) || request.resource.data.secondApprovedBy == null);
-                        
-      let validLevel2 = statusChangedToApproved && 
-                        (!('firstApprovedBy' in resource.data) || request.resource.data.firstApprovedBy == resource.data.firstApprovedBy) &&
-                        request.resource.data.secondApprovedBy == request.auth.uid &&
-                        (!('firstApprovedBy' in resource.data) || request.auth.uid != resource.data.firstApprovedBy);
-
-      return isAdmin() && !isOwner && (validLevel1 || validLevel2 || statusChangedToRejected);
+    // pending থাকা অবস্থায় মেম্বার শুধু মেসেজ/প্রমাণ বদলাতে পারবে
+    function isMemberPaymentEdit() {
+      return request.auth.uid == resource.data.userId &&
+        resource.data.status == 'pending' &&
+        changedKeys().hasOnly(['message', 'proofImageURL']);
     }
 
+    // দুই ধাপের অনুমোদন: ১ম ও ২য় অনুমোদনকারী আলাদা, নিজের পেমেন্ট নিজে অনুমোদন নয়,
+    // আর অনুমোদনের সময় টাকার অঙ্ক বা মাস বদলানো যাবে না
+    function isAdminPaymentDecision() {
+      let isOwner = request.auth.uid == resource.data.userId;
+      let toLevel1 = resource.data.status == 'pending' &&
+        newData().status == 'level_1_approved' &&
+        newData().firstApprovedBy == request.auth.uid &&
+        changedKeys().hasOnly(['status', 'firstApprovedBy', 'firstApprovedByName', 'firstApprovedAt']);
+      let toApproved = resource.data.status == 'level_1_approved' &&
+        newData().status == 'approved' &&
+        newData().secondApprovedBy == request.auth.uid &&
+        request.auth.uid != resource.data.get('firstApprovedBy', '') &&
+        changedKeys().hasOnly(['status', 'secondApprovedBy', 'secondApprovedByName', 'secondApprovedAt', 'approvedBy', 'approvedAt']);
+      let toRejected = resource.data.status in ['pending', 'level_1_approved'] &&
+        newData().status == 'rejected' &&
+        newData().rejectedBy == request.auth.uid &&
+        changedKeys().hasOnly(['status', 'rejectReason', 'rejectedBy', 'rejectedByName', 'rejectedAt']);
+      return isAdmin() && !isOwner && (toLevel1 || toApproved || toRejected);
+    }
+
+    // পুরোনো (slot request, profile change) অনুমোদন ধারার জন্য
+    function isAdminApproval(docId) {
+      let isOwner = request.auth.uid == resource.data.get('userId', resource.data.get('memberUid', ''));
+      let toLevel1 = resource.data.status == 'pending' && newData().status == 'level_1_approved' &&
+                     newData().firstApprovedBy == request.auth.uid;
+      let toApproved = resource.data.status == 'level_1_approved' && newData().status == 'approved' &&
+                       newData().secondApprovedBy == request.auth.uid &&
+                       request.auth.uid != resource.data.get('firstApprovedBy', '');
+      let toRejected = resource.data.status in ['pending', 'level_1_approved'] && newData().status == 'rejected';
+      return isAdmin() && !isOwner && (toLevel1 || toApproved || toRejected);
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated();
+      allow create: if isValidPaymentCreate();
+      allow update: if isMemberPaymentEdit() || isAdminPaymentDecision();
+      // অনুমোদিত পেমেন্ট কখনো মুছবে না; ভুল হলে সংশোধনী এন্ট্রি দিতে হবে
+      allow delete: if isSuperAdmin() && resource.data.status != 'approved';
+    }
+
+    // পুরোনো, এখন অব্যবহৃত কালেকশন: শুধু পড়া যাবে
+    match /yearlyPayments/{paymentId} {
+      allow read: if isAuthenticated();
+      allow write: if isSuperAdmin();
+    }
+
+    // ---------------------------------------------------------------- users
     match /users/{userId} {
       allow read: if isAuthenticated();
       // নতুন ইউজার শুধু member + pending_approval হিসেবেই ঢুকতে পারবে
       allow create: if isAuthenticated() && request.auth.uid == userId &&
-        request.resource.data.role == 'member' &&
-        request.resource.data.status == 'pending_approval' &&
-        !('permissions' in request.resource.data);
+        newData().role == 'member' &&
+        newData().status == 'pending_approval' &&
+        !('permissions' in newData());
       allow update: if isAuthenticated() && (
         // নিজের প্রোফাইল: role/permissions/status/slot নিজে বদলানো যাবে না
         (request.auth.uid == userId &&
@@ -96,67 +140,129 @@ service cloud.firestore {
         // role বা permissions বদলাতে পারবে শুধু সুপার অ্যাডমিন
         isSuperAdmin()
       );
-      allow delete: if isAdmin();
+      allow delete: if isSuperAdmin();
     }
-    
+
     match /usersPrivate/{userId} {
       allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
       allow create: if isAuthenticated() && request.auth.uid == userId;
       allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
-      allow delete: if isAdmin();
+      allow delete: if isSuperAdmin();
     }
-    
-    match /payments/{paymentId} {
+
+    // ---------------------------------------------------------------- money out
+    // খরচ: যে কেউ শুধু pending খরচ জমা দিতে পারবে, নিজের নামে
+    match /expenses/{expenseId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId && request.resource.data.status == 'pending';
-      allow update: if isMemberUpdate(paymentId) || isAdminApproval(paymentId);
-      allow delete: if isAdmin();
+      allow create: if isActiveMember() &&
+        newData().status == 'pending' &&
+        newData().loggedBy == request.auth.uid &&
+        isPositiveNumber(newData().amount);
+      // অনুমোদন/বাতিলের সময় অঙ্ক বদলানো যাবে না, নিজের জমা দেওয়া খরচ নিজে অনুমোদন নয়
+      allow update: if isAdmin() &&
+        resource.data.status == 'pending' &&
+        newData().status in ['approved', 'rejected'] &&
+        newData().amount == resource.data.amount &&
+        request.auth.uid != resource.data.get('loggedBy', '');
+      allow delete: if isSuperAdmin() && resource.data.status != 'approved';
     }
-    
-    match /yearlyPayments/{paymentId} {
+
+    match /investments/{investmentId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId && request.resource.data.status == 'pending';
-      allow update: if isMemberUpdate(paymentId) || isAdminApproval(paymentId);
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isActiveMember() &&
+        changedKeys().hasOnly(['votedUserIds', 'totalVotes', 'approveVotes', 'rejectVotes', 'opinions']) &&
+        isOwnNewVote() &&
+        newData().totalVotes == resource.data.get('totalVotes', 0) + 1
+      );
+    }
+    match /investmentTransactions/{txnId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // ---------------------------------------------------------------- audit log
+    // লগ শুধু নিজের নামে লেখা যাবে, আর কখনো বদলানো যাবে না
+    match /activityLog/{logId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && newData().actorId == request.auth.uid;
+      allow update: if false;
+      allow delete: if isSuperAdmin();
+    }
+
+    // ---------------------------------------------------------------- requests
+    match /adminRequests/{docId} {
+      // PIN রিসেটের hash থাকে, তাই শুধু অ্যাডমিন আর সংশ্লিষ্ট ব্যক্তি পড়তে পারবে
+      allow read: if isAuthenticated() && (
+        isAdmin() ||
+        resource.data.targetUserId == request.auth.uid ||
+        resource.data.requestedBy == request.auth.uid
+      );
+      allow create: if isAuthenticated() &&
+        newData().requestedBy == request.auth.uid &&
+        newData().status == 'PENDING' && (
+          isAdmin() ||
+          // সাধারণ মেম্বার শুধু নিজের জন্য PIN রিসেট বা স্লট বাড়ানোর আবেদন করতে পারবে
+          (newData().requestType in ['PIN_RESET', 'SLOT_INCREASE'] && newData().targetUserId == request.auth.uid)
+        );
+      allow update: if isAdmin() && request.auth.uid != resource.data.get('requestedBy', '');
+      allow delete: if isSuperAdmin();
+    }
+
+    match /slotRequests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isActiveMember() && request.auth.uid == newData().userId && newData().status == 'pending';
+      allow update: if isAdminApproval(requestId);
       allow delete: if isAdmin();
     }
-    
+
+    match /profileChangeRequests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == newData().memberUid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /accountMigrations/{migrationId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() && request.auth.uid == newData().requestedBy;
+      allow update, delete: if isAdmin();
+    }
+
+    match /pinRecoveryRequests/{requestId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == newData().userId;
+      allow update: if isAdmin() && request.auth.uid != resource.data.userId;
+      allow delete: if isAdmin();
+    }
+
+    // ---------------------------------------------------------------- community
     match /notices/{noticeId} {
       allow read: if isAuthenticated();
       allow write: if isAdmin();
     }
-    
+
     match /polls/{pollId} {
       allow read: if isAuthenticated();
       allow create, delete: if isAdmin();
       allow update: if isAdmin() || (
-        isAuthenticated() && isActiveAccount() &&
+        isActiveMember() &&
         changedKeys().hasOnly(['options', 'votedUserIds']) &&
         isOwnNewVote()
       );
     }
-    
-    match /activityLog/{logId} {
-      allow read, create: if isAuthenticated();
-      allow update: if false;
-      allow delete: if isAdmin();
-    }
-    
+
     match /communityMessages/{messageId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
+      allow create: if isActiveMember() && request.auth.uid == newData().userId;
       allow update: if false;
       allow delete: if isAdmin();
     }
-    
+
     match /adminSupportMessages/{messageId} {
       allow read: if isAuthenticated() && (request.auth.uid == resource.data.fromUserId || isAdmin());
-      allow create: if isAuthenticated() && (request.auth.uid == request.resource.data.fromUserId || isAdmin());
-      allow update, delete: if isAdmin();
-    }
-
-    match /expenses/{expenseId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
+      allow create: if isAuthenticated() && (request.auth.uid == newData().fromUserId || isAdmin());
       allow update, delete: if isAdmin();
     }
 
@@ -170,59 +276,14 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    match /profileChangeRequests/{requestId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.memberUid;
-      allow update, delete: if isAdmin();
-    }
-
+    // ---------------------------------------------------------------- settings
     match /settings/{settingId} {
       allow read: if isAuthenticated();
       // হিসাব শুরুর মাস (ledgerStartMonth) বদলাতে পারবে শুধু সুপার অ্যাডমিন
-      allow create: if isAdmin() && (!('ledgerStartMonth' in request.resource.data) || request.resource.data.ledgerStartMonth == null || isSuperAdmin());
+      allow create: if isAdmin() && (!('ledgerStartMonth' in newData()) || newData().ledgerStartMonth == null || isSuperAdmin());
       allow update: if isAdmin() && (!changedKeys().hasAny(['ledgerStartMonth']) || isSuperAdmin());
-      allow delete: if isSuperAdmin();
-    }
-    
-    match /adminRequests/{docId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
-    }
-
-    match /slotRequests/{requestId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
-      allow update, delete: if isAdmin();
-    }
-
-
-
-    match /investments/{investmentId} {
-      allow read: if isAuthenticated();
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || (
-        isAuthenticated() && isActiveAccount() &&
-        changedKeys().hasOnly(['votedUserIds', 'totalVotes', 'approveVotes', 'rejectVotes', 'opinions']) &&
-        isOwnNewVote() &&
-        request.resource.data.totalVotes == resource.data.get('totalVotes', 0) + 1
-      );
-    }
-    match /investmentTransactions/{txnId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-    match /accountMigrations/{migrationId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.requestedBy;
-      allow update, delete: if isAdmin();
-    }
-    match /pinRecoveryRequests/{requestId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
-      allow update: if isAdmin() && request.auth.uid != resource.data.userId;
-      allow delete: if isAdmin();
+      // পেমেন্ট সেটিংস মুছবে শুধু সুপার অ্যাডমিন; অন্য সেটিংস (যেমন upcomingEvent) অ্যাডমিন মুছতে পারবে
+      allow delete: if (settingId != 'payment' && isAdmin()) || isSuperAdmin();
     }
   }
 }

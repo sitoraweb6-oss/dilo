@@ -46,6 +46,7 @@ export function NoticesTab() {
         });
         
         await addDoc(collection(db, 'activityLog'), {
+          actorId: userProfile.id,
           description: `${userProfile.displayName} একটি নতুন নোটিশ দিয়েছেন: "${title}"`,
           timestamp: serverTimestamp(),
         });
