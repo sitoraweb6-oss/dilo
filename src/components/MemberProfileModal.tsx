@@ -6,6 +6,7 @@ import { format } from 'date-fns';
 import { getMemberSlotSummary } from '../lib/paymentUtils';
 import { buildMemberLedger, describePaymentBn, monthListLabelBn } from '../lib/ledger';
 import { usePaymentSettings } from '../lib/usePaymentSettings';
+import { MemberStatement } from './MemberStatement';
 import { db } from '../lib/firebase';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
@@ -57,8 +58,7 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
   const currentMonth = format(new Date(), 'yyyy-MM');
   const totalSavings = payments.filter(p => p.status === 'approved').reduce((sum, p) => sum + p.amount, 0);
   
-  const slotSummary = getMemberSlotSummary(member, payments, currentMonth);
-  const ledger = buildMemberLedger(member, payments, settings);
+
 
   return (
     <AnimatePresence>
@@ -149,109 +149,11 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
               </div>
             </div>
 
-            <div className="mb-6">
-              <h4 className="font-bold text-slate-700 mb-3 text-sm border-b border-slate-100 pb-2">বর্তমান মাস ({format(new Date(), 'MMMM')})</h4>
-              
-              <div className={`p-4 rounded-2xl border mb-3 ${
-                slotSummary.status === 'approved' ? 'bg-emerald-50 border-emerald-100' :
-                slotSummary.status === 'partial' ? 'bg-amber-50 border-amber-200' :
-                slotSummary.status === 'pending' ? 'bg-amber-50 border-amber-100' :
-                'bg-red-50 border-red-100'
-              }`}>
-                <div className="flex items-center gap-2 mb-3">
-                  {slotSummary.status === 'approved' ? <CheckCircle2 size={18} className="text-emerald-600" /> : 
-                   slotSummary.status === 'partial' ? <AlertCircle size={18} className="text-amber-600" /> :
-                   slotSummary.status === 'pending' ? <Clock size={18} className="text-amber-500" /> : 
-                   <AlertCircle size={18} className="text-red-500" />}
-                  <p className={`font-bold ${
-                    slotSummary.status === 'approved' ? 'text-emerald-700' :
-                    slotSummary.status === 'partial' ? 'text-amber-700' :
-                    slotSummary.status === 'pending' ? 'text-amber-700' : 'text-red-700'
-                  }`}>
-                    {slotSummary.status === 'approved' ? '✅ সম্পূর্ণ পরিশোধিত' : 
-                     slotSummary.status === 'partial' ? '🟡 আংশিক পরিশোধিত' :
-                     slotSummary.status === 'pending' ? 'অপেক্ষমাণ' : '🔴 বকেয়া'}
-                  </p>
-                </div>
-                
-                <div className="grid grid-cols-4 gap-2 text-center text-sm">
-                  <div className="bg-white/60 p-2 rounded-xl">
-                    <p className="text-[10px] text-slate-500 mb-0.5">মোট স্লট</p>
-                    <p className="font-bold text-slate-700">{slotSummary.totalSlots}</p>
-                  </div>
-                  <div className="bg-white/60 p-2 rounded-xl">
-                    <p className="text-[10px] text-emerald-600 mb-0.5">পরিশোধিত</p>
-                    <p className="font-bold text-emerald-700">{slotSummary.paidSlots}</p>
-                  </div>
-                  <div className="bg-white/60 p-2 rounded-xl">
-                    <p className="text-[10px] text-red-500 mb-0.5">বকেয়া</p>
-                    <p className="font-bold text-red-700">{slotSummary.dueSlots}</p>
-                  </div>
-                  <div className="bg-white/60 p-2 rounded-xl">
-                    <p className="text-[10px] text-amber-500 mb-0.5">অপেক্ষমাণ</p>
-                    <p className="font-bold text-amber-700">{slotSummary.pendingSlots}</p>
-                  </div>
-                </div>
-                <div className={`mt-3 p-3 rounded-xl text-sm ${ledger.hasDues ? 'bg-red-50 text-red-800' : 'bg-emerald-50 text-emerald-800'}`}>
-                  {ledger.hasDues ? (
-                    <>
-                      <p className="font-bold">মোট বকেয়া: ৳{ledger.dueAmount.toLocaleString('en-IN')}</p>
-                      {ledger.slots.filter(s => s.dueAmount > 0).map(s => {
-                        const dueMonths = s.months.filter(l => l.status === 'overdue' || l.status === 'current').map(l => l.month);
-                        const dueYears = s.annual.filter(a => a.status === 'overdue').map(a => a.year);
-                        return (
-                          <p key={s.slot.nameId} className="text-xs mt-1">
-                            {s.slot.label}: {dueMonths.length ? monthListLabelBn(dueMonths) : ''}{dueYears.length ? ` • বার্ষিক ${dueYears.join(', ')}` : ''}
-                          </p>
-                        );
-                      })}
-                    </>
-                  ) : (
-                    <p className="font-bold">কোনো বকেয়া নেই</p>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div>
-              <h4 className="font-bold text-slate-700 mb-3 text-sm border-b border-slate-100 pb-2">পেমেন্ট হিস্ট্রি</h4>
-              {loading ? (
-                <div className="flex justify-center p-4"><div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
-              ) : payments.length === 0 ? (
-                <p className="text-center text-slate-500 text-sm py-4 bg-slate-50 rounded-xl">কোনো পেমেন্ট রেকর্ড নেই</p>
-              ) : (
-                <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
-                  {payments.map(payment => (
-                    <div key={payment.id} className="flex justify-between items-center p-3 bg-white border border-slate-100 shadow-sm rounded-xl">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                          payment.status === 'approved' ? 'bg-emerald-100 text-emerald-600' :
-                          payment.status === 'rejected' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
-                        }`}>
-                          {payment.status === 'approved' ? <CheckCircle2 size={16} /> :
-                           payment.status === 'rejected' ? <AlertCircle size={16} /> : <Clock size={16} />}
-                        </div>
-                        <div>
-                          <p className="text-sm font-bold text-slate-800">{describePaymentBn(payment)}</p>
-                          <p className="text-[10px] text-slate-500">
-                            {payment.status === 'approved' ? 'অনুমোদিত' :
-                             payment.status === 'rejected' ? 'বাতিল' : 'পেন্ডিং'}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm font-bold text-slate-800">৳ {payment.amount}</p>
-                        <p className="text-[10px] text-slate-500">স্লট: {member.names.findIndex(n => n.nameId === payment.nameId) + 1}</p>
-                        {payment.status === 'approved' && payment.approvedAt && (
-                          <p className="text-[9px] text-slate-400 mt-0.5">
-                            {format(payment.approvedAt.toDate(), 'dd MMM yyyy')}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {loading ? (
+              <div className="flex justify-center p-4"><div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
+            ) : (
+              <MemberStatement member={member} payments={payments} settings={settings} showExport={isAdmin || userProfile?.id === member.id} />
+            )}
           </div>
         
         {/* Super Admin Actions */}

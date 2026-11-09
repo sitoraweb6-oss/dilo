@@ -58,10 +58,13 @@ export interface Payment {
   approvedBy?: string;
   firstApprovedBy?: string;
   firstApprovedAt?: any;
+  firstApprovedByName?: string;
   secondApprovedBy?: string;
   secondApprovedAt?: any;
+  secondApprovedByName?: string;
   rejectReason?: string;
   rejectedBy?: string;
+  rejectedByName?: string;
   rejectedAt?: any;
   approvedAt?: any;
   lateFine?: number;

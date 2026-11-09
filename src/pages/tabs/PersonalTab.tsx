@@ -9,6 +9,7 @@ import { Payment } from '../../types';
 import { TotalSavingsModal } from '../../components/TotalSavingsModal';
 import { ProfileChangeModal } from '../../components/ProfileChangeModal';
 import { SlotRequestModal } from '../../components/SlotRequestModal';
+import { MemberStatement } from '../../components/MemberStatement';
 import { Copy, PlusCircle, Edit2 } from 'lucide-react';
 import {
   buildMemberLedger, getPaymentCoverage, isActivePaymentStatus, monthLabelBn, monthListLabelBn,
@@ -660,49 +661,10 @@ export function PersonalTab() {
         </div>
       </div>
 
-      {/* Payment History */}
+      {/* Full statement: totals, month-by-month, every transaction with approvals */}
       <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
-        <h2 className="font-heading font-bold text-slate-800 text-lg mb-4">পেমেন্ট হিস্ট্রি</h2>
-        {payments.length === 0 ? (
-          <p className="text-slate-500 text-sm text-center py-4">কোনো পেমেন্ট রেকর্ড পাওয়া যায়নি</p>
-        ) : (
-          <div className="space-y-3">
-            {payments.map(payment => {
-              const slotLabel = userProfile.names.find(n => n.nameId === payment.nameId)?.label;
-              return (
-                <div key={payment.id} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-                      payment.status === 'approved' ? 'bg-emerald-100 text-emerald-600' :
-                      payment.status === 'rejected' ? 'bg-red-100 text-red-600' :
-                      'bg-blue-100 text-blue-600'
-                    }`}>
-                      {payment.status === 'approved' ? <CheckCircle2 size={20} /> :
-                        payment.status === 'rejected' ? <AlertCircle size={20} /> :
-                        <Clock size={20} />}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-slate-800 leading-snug">{describePaymentBn(payment)}</p>
-                      <p className="text-[10px] text-slate-500 mt-0.5">
-                        {payment.status === 'approved' ? 'অনুমোদিত' :
-                          payment.status === 'rejected' ? 'বাতিল' :
-                          payment.status === 'level_1_approved' ? 'প্রথম অনুমোদন হয়েছে' : 'পেন্ডিং'}
-                        {' • '}জমা: {payment.submittedAt?.toDate ? format(payment.submittedAt.toDate(), 'dd/MM/yyyy') : monthLabelBn(payment.month)}
-                        {userProfile.names.length > 1 && slotLabel ? ` • ${slotLabel}` : ''}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className="text-sm font-bold text-slate-800">{taka(payment.amount || 0)}</p>
-                    {(payment.lateFine || 0) > 0 && (
-                      <p className="text-[10px] text-red-500">জরিমানা: {taka(payment.lateFine || 0)}</p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <h2 className="font-heading font-bold text-slate-800 text-lg mb-4">আমার হিসাব বিবরণী</h2>
+        <MemberStatement member={userProfile} payments={payments} settings={settings} />
       </div>
 
     </div>

@@ -201,6 +201,7 @@ export const PendingPaymentItem: React.FC<{ payment: Payment, user?: UserProfile
         status: 'rejected',
         rejectReason: rejectReason,
         rejectedBy: currentUser.id,
+        rejectedByName: currentUser.displayName || '',
         rejectedAt: serverTimestamp()
       });
       const logRef = doc(collection(db, 'activityLog'));

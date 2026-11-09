@@ -9,9 +9,11 @@ import { usePaymentSettings } from '../../lib/usePaymentSettings';
 import {
   buildMemberLedger, collectionByCoveredMonth, annualCollectionByYear, systemApproved, memberSavings,
   getPaymentCoverage, describePaymentBn, monthLabelBn, monthListLabelBn, monthRange, addMonths, toMonthKey,
-  MonthLine, MemberLedger,
+  MonthLine, MemberLedger, toBnDigits,
 } from '../../lib/ledger';
+import { MemberStatement } from '../../components/MemberStatement';
 
+const BN_SHORT = ['জানু', 'ফেব্রু', 'মার্চ', 'এপ্রি', 'মে', 'জুন', 'জুলা', 'আগ', 'সেপ্টে', 'অক্টো', 'নভে', 'ডিসে'];
 const taka = (n: number) => `৳ ${Math.round(n).toLocaleString('en-IN')}`;
 const STATUS_BN: Record<MonthLine['status'], string> = {
   paid: 'পরিশোধিত', pending: 'অপেক্ষমাণ', overdue: 'বকেয়া', current: 'বাকি (চলতি)', upcoming: '—',
@@ -30,6 +32,8 @@ export function ReportsTab() {
   const [exporting, setExporting] = useState<string | null>(null);
   const currentMonth = toMonthKey(new Date());
   const [reportMonth, setReportMonth] = useState(currentMonth);
+  const [matrixYear, setMatrixYear] = useState(currentMonth.slice(0, 4));
+  const [statementMemberId, setStatementMemberId] = useState('');
 
   useEffect(() => {
     let isMounted = true;
@@ -342,6 +346,72 @@ export function ReportsTab() {
               </div>
             ))}
           </div>
+        )}
+      </div>
+
+      {/* Year grid: every member x every month */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm print:shadow-none">
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <h3 className="font-bold text-slate-800 font-heading">বার্ষিক ছক</h3>
+          <select value={matrixYear} onChange={e => setMatrixYear(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium outline-none">
+            {Array.from(new Set(monthOptions.map(m => m.slice(0, 4)))).map(y => <option key={y} value={y}>{toBnDigits(y)}</option>)}
+          </select>
+        </div>
+        <p className="text-[10px] text-slate-500 mb-3">✓ পরিশোধিত • … অপেক্ষমাণ • ✗ বকেয়া • ফাঁকা = হিসাব শুরু হয়নি / ভবিষ্যৎ</p>
+        <div className="overflow-x-auto -mx-5 px-5">
+          <table className="text-[11px] border-collapse min-w-max">
+            <thead>
+              <tr className="text-slate-500">
+                <th className="text-left font-bold py-1 pr-3 sticky left-0 bg-white">সদস্য / স্লট</th>
+                {Array.from({ length: 12 }, (_, i) => `${matrixYear}-${String(i + 1).padStart(2, '0')}`).map(m => (
+                  <th key={m} className="font-bold px-1 py-1">{BN_SHORT[Number(m.slice(5)) - 1]}</th>
+                ))}
+                <th className="font-bold px-1 py-1">বার্ষিক</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ledgers.flatMap(l => l.slots.map(sl => {
+                const all = [...sl.months, ...sl.upcoming];
+                const annual = sl.annual.find(a => a.year === matrixYear);
+                return (
+                  <tr key={l.member.id + sl.slot.nameId} className="border-t border-slate-50">
+                    <td className="py-1 pr-3 sticky left-0 bg-white whitespace-nowrap">
+                      <span className="font-medium text-slate-700">{l.member.displayName}</span>
+                      {l.member.names.length > 1 && <span className="text-slate-400"> • {sl.slot.label}</span>}
+                    </td>
+                    {Array.from({ length: 12 }, (_, i) => `${matrixYear}-${String(i + 1).padStart(2, '0')}`).map(m => {
+                      const line = all.find(x => x.month === m);
+                      const st = line?.status;
+                      const cls = st === 'paid' ? 'bg-emerald-100 text-emerald-700' : st === 'pending' ? 'bg-amber-100 text-amber-700' : st === 'overdue' || st === 'current' ? 'bg-red-100 text-red-700' : 'bg-slate-50 text-slate-300';
+                      const sym = st === 'paid' ? '✓' : st === 'pending' ? '…' : st === 'overdue' || st === 'current' ? '✗' : '';
+                      return <td key={m} className="px-0.5 py-0.5"><div className={`w-7 h-6 rounded flex items-center justify-center font-bold ${cls}`}>{sym}</div></td>;
+                    })}
+                    <td className="px-0.5 py-0.5">
+                      <div className={`w-9 h-6 rounded flex items-center justify-center font-bold ${annual?.status === 'paid' ? 'bg-emerald-100 text-emerald-700' : annual?.status === 'pending' ? 'bg-amber-100 text-amber-700' : annual?.status === 'overdue' ? 'bg-red-100 text-red-700' : annual ? 'bg-slate-100 text-slate-500' : 'bg-slate-50 text-slate-300'}`}>
+                        {annual?.status === 'paid' ? '✓' : annual?.status === 'pending' ? '…' : annual?.status === 'overdue' ? '✗' : annual ? '○' : ''}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              }))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* One member, everything */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm print:shadow-none">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h3 className="font-bold text-slate-800 font-heading">সদস্যের পূর্ণ বিবরণী</h3>
+          <select value={statementMemberId} onChange={e => setStatementMemberId(e.target.value)} className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-medium outline-none max-w-[55%]">
+            <option value="">সদস্য বাছাই করুন</option>
+            {[...activeMembers].sort((a, b) => a.displayName.localeCompare(b.displayName)).map(m => <option key={m.id} value={m.id}>{m.displayName}</option>)}
+          </select>
+        </div>
+        {statementMemberId && activeMembers.find(m => m.id === statementMemberId) ? (
+          <MemberStatement member={activeMembers.find(m => m.id === statementMemberId)!} payments={payments} settings={settings} />
+        ) : (
+          <p className="text-xs text-slate-400 text-center py-3">কোনো সদস্য বাছাই করলে তার সব জমা, মাসভিত্তিক হিসাব, কে কবে অনুমোদন করেছে সব দেখা যাবে।</p>
         )}
       </div>
 
