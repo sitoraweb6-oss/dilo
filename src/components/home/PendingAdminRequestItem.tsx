@@ -1,7 +1,8 @@
 import { toMonthKey } from '../../lib/ledger';
 import React, { useState } from 'react';
 import { db } from '../../lib/firebase';
-import { doc, updateDoc, addDoc, serverTimestamp, runTransaction, collection } from 'firebase/firestore';
+import { doc, updateDoc, addDoc, serverTimestamp, runTransaction, collection, getDocs, query, where, setDoc } from 'firebase/firestore';
+import { hasPermission } from '../../lib/AuthContext';
 import { AdminRequest, UserProfile } from '../../types';
 import { CheckCircle2, XCircle, AlertCircle, Layers, ShieldCheck, UserX, AlertTriangle, ArrowRight } from 'lucide-react';
 import { format } from 'date-fns';
@@ -11,8 +12,8 @@ export const PendingAdminRequestItem: React.FC<{ request: AdminRequest, currentU
   const [loading, setLoading] = useState(false);
   const targetUser = usersMap[request.targetUserId];
   
-  const isSuperAdmin = currentUser.role === 'super_admin';
-  const isAdmin = currentUser.role === 'admin' || isSuperAdmin;
+  const isSuperAdmin = hasPermission(currentUser, 'super_admin');
+  const isAdmin = hasPermission(currentUser, 'admin') || isSuperAdmin;
   
   const canApprove = isAdmin && request.requestedBy !== currentUser.id && request.firstApprovedBy !== currentUser.id;
 
@@ -20,6 +21,34 @@ export const PendingAdminRequestItem: React.FC<{ request: AdminRequest, currentU
     if (!canApprove) return;
     try {
       setLoading(true);
+
+      // Account migration, final approval: copy the old account's approved payments to the
+      // new account FIRST (one write each, deterministic ids so a retry never duplicates),
+      // then mark the request approved in the transaction below.
+      const isMigrationFinal = request.requestType === 'ACCOUNT_MIGRATION' && request.status === 'LEVEL_1_APPROVED';
+      let copiedCount = 0;
+      if (isMigrationFinal) {
+        const destId = request.metadata.destinationUserId;
+        const srcSnap = await getDocs(query(collection(db, 'payments'), where('userId', '==', request.targetUserId)));
+        const already = await getDocs(query(collection(db, 'payments'), where('userId', '==', destId)));
+        const existingIds = new Set(already.docs.map(d => d.id));
+        for (const d of srcSnap.docs) {
+          const p = d.data() as any;
+          if (p.status !== 'approved' || p.isCopiedRecord) continue;
+          const copyId = `mig_${request.id}_${d.id}`;
+          if (existingIds.has(copyId)) continue;
+          await setDoc(doc(db, 'payments', copyId), {
+            ...p,
+            userId: destId,
+            isCopiedRecord: true,
+            copiedFrom: d.id,
+            migrationRequestId: request.id,
+            copiedAt: serverTimestamp(),
+          });
+          copiedCount++;
+        }
+      }
+
       await runTransaction(db, async (transaction) => {
         const reqRef = doc(db, 'adminRequests', request.id);
         const reqDoc = await transaction.get(reqRef);
@@ -77,12 +106,21 @@ export const PendingAdminRequestItem: React.FC<{ request: AdminRequest, currentU
           else if (request.requestType === 'ACCOUNT_MIGRATION') {
             const oldUserRef = doc(db, 'users', request.targetUserId);
             const newUserRef = doc(db, 'users', request.metadata.destinationUserId);
-            
-            // Logic for migration (simplified: deactivate old if transfer)
+            const oldDoc = await transaction.get(oldUserRef);
+            const newDoc = await transaction.get(newUserRef);
+            if (!oldDoc.exists() || !newDoc.exists()) throw new Error('পুরোনো বা নতুন অ্যাকাউন্ট পাওয়া যায়নি');
+
+            // the new account gets the old account's slots (same slot ids, so copied payments line up)
+            const oldNames = (oldDoc.data() as UserProfile).names || [];
+            const newNames = (newDoc.data() as UserProfile).names || [];
+            const have = new Set(newNames.map(n => n.nameId));
+            const merged = [...newNames, ...oldNames.filter(n => !have.has(n.nameId))];
+            transaction.update(newUserRef, { names: merged });
+
             if (request.metadata.migrationType === 'transfer') {
-              transaction.update(oldUserRef, { 
-                status: 'migrated', 
-                migratedTo: request.metadata.destinationUserId 
+              transaction.update(oldUserRef, {
+                status: 'migrated',
+                migratedTo: request.metadata.destinationUserId
               });
             }
           }
@@ -112,7 +150,7 @@ export const PendingAdminRequestItem: React.FC<{ request: AdminRequest, currentU
           actorId: currentUser.id,
           action: isFinal ? 'ADMIN_REQUEST_APPROVED' : 'ADMIN_REQUEST_LEVEL_1',
           targetId: request.targetUserId,
-          description: `${currentUser.displayName} ${request.requestType} আবেদন ${isFinal ? 'চূড়ান্ত অনুমোদন' : 'প্রাথমিক অনুমোদন'} করেছেন।`,
+          description: `${currentUser.displayName} ${request.requestType} আবেদন ${isFinal ? 'চূড়ান্ত অনুমোদন' : 'প্রাথমিক অনুমোদন'} করেছেন।${isMigrationFinal ? ` ${copiedCount}টি পেমেন্ট নতুন অ্যাকাউন্টে কপি হয়েছে।` : ''}`,
           timestamp: serverTimestamp()
         });
       });
@@ -134,8 +172,9 @@ export const PendingAdminRequestItem: React.FC<{ request: AdminRequest, currentU
         rejectedByName: currentUser.displayName,
         rejectedAt: serverTimestamp()
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert('বাতিল করা যায়নি: ' + (err?.message || ''));
     } finally {
       setLoading(false);
     }

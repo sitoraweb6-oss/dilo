@@ -86,6 +86,9 @@ export interface Payment {
   /** date the money was actually received (yyyy-MM-dd), for manual entries */
   receivedDate?: string;
   /** in-memory only: old record whose extra money was moved to earlier unpaid months */
+  /** account migration: this record is a copy of `copiedFrom`, made by request `migrationRequestId` */
+  copiedFrom?: string;
+  migrationRequestId?: string;
   autoAllocated?: boolean;
   originalMonths?: string[];
   cashRecipientName?: string;

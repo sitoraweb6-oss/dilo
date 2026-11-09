@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { addDoc, collection, getDocs, query, serverTimestamp, where } from 'firebase/firestore';
 import { format } from 'date-fns';
 import { X, PenLine } from 'lucide-react';
@@ -130,9 +131,15 @@ export function ManualEntryModal({
   const chip = (sel: boolean) =>
     `flex items-center justify-between p-2.5 rounded-xl border text-left text-sm transition-all ${sel ? 'bg-primary-50 border-primary-400 ring-1 ring-primary-400' : 'bg-white border-slate-200'}`;
 
-  return (
-    <div className="fixed inset-0 z-[70] bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
-      <div className="bg-white w-full sm:max-w-md max-h-[92vh] overflow-y-auto rounded-t-3xl sm:rounded-3xl p-5" onClick={e => e.stopPropagation()}>
+  // Rendered into <body> so the profile popup (which clips and transforms its children)
+  // can't cut off the submit button; extra bottom space keeps it clear of the phone's nav bar.
+  return createPortal(
+    <div className="fixed inset-0 z-[200] bg-black/40 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+      <div
+        className="bg-white w-full sm:max-w-md max-h-[90dvh] overflow-y-auto overscroll-contain rounded-t-3xl sm:rounded-3xl p-5"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 28px)' }}
+        onClick={e => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between mb-1">
           <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2"><PenLine size={18} /> ম্যানুয়াল এন্ট্রি</h3>
           <button onClick={onClose} className="p-1.5 rounded-full hover:bg-slate-100"><X size={18} /></button>
@@ -219,6 +226,7 @@ export function ManualEntryModal({
           {saving ? 'জমা হচ্ছে...' : `${taka(total)} এন্ট্রি দিন`}
         </button>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

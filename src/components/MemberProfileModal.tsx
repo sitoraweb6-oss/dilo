@@ -11,7 +11,7 @@ import { ManualEntryModal } from './ManualEntryModal';
 import { db } from '../lib/firebase';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
-import { collection, query, where, onSnapshot, orderBy, getDocs } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, orderBy, getDocs, addDoc, serverTimestamp } from 'firebase/firestore';
 
 interface MemberProfileModalProps {
   member: UserProfile | null;
@@ -21,7 +21,7 @@ interface MemberProfileModalProps {
 export function MemberProfileModal({ member, onClose }: MemberProfileModalProps) {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
-  const { userProfile, isAdmin } = useAuth();
+  const { userProfile, isAdmin, isSuperAdmin } = useAuth();
   const { settings } = usePaymentSettings();
   const navigate = useNavigate();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -177,7 +177,7 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
           </div>
         
         {/* Super Admin Actions */}
-        {isAdmin && userProfile?.role === 'super_admin' && (
+        {isSuperAdmin && userProfile && (
           <div className="p-6 border-t border-slate-100 bg-red-50/50">
             <h4 className="text-sm font-bold text-red-800 mb-3 flex items-center gap-2">
               <AlertCircle size={16} /> সুপার অ্যাডমিন অ্যাকশন
@@ -186,7 +186,7 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
               <button 
                 onClick={() => {
                   onClose();
-                  navigate('/account-migration');
+                  navigate(`/account-migration?from=${member.id}`);
                 }}
                 className="w-full py-2 bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-200"
               >
@@ -199,7 +199,6 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
                   if (confirm('নিষ্ক্রিয় করার আবেদন জমা দিতে চান?')) {
                     setIsSubmitting(true);
                     try {
-                      const { addDoc, collection, serverTimestamp } = require('firebase/firestore');
                       await addDoc(collection(db, 'adminRequests'), {
                         requestType: 'MEMBER_DEACTIVATION',
                         status: 'PENDING',
@@ -212,7 +211,7 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
                       });
                       alert('আবেদন জমা হয়েছে');
                       onClose();
-                    } catch(e) { alert('Error: ' + e.message); }
+                    } catch(e: any) { alert('Error: ' + e.message); }
                     setIsSubmitting(false);
                   }
                 }}
@@ -228,7 +227,6 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
                   if (confirm('মুছে ফেলার আবেদন জমা দিতে চান?')) {
                     setIsSubmitting(true);
                     try {
-                      const { addDoc, collection, serverTimestamp } = require('firebase/firestore');
                       await addDoc(collection(db, 'adminRequests'), {
                         requestType: 'MEMBER_DELETION',
                         status: 'PENDING',
@@ -241,7 +239,7 @@ export function MemberProfileModal({ member, onClose }: MemberProfileModalProps)
                       });
                       alert('আবেদন জমা হয়েছে');
                       onClose();
-                    } catch(e) { alert('Error: ' + e.message); }
+                    } catch(e: any) { alert('Error: ' + e.message); }
                     setIsSubmitting(false);
                   }
                 }}

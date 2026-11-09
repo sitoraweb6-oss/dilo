@@ -127,9 +127,28 @@ service cloud.firestore {
         ]);
     }
 
+    // অ্যাকাউন্ট মাইগ্রেশন: চূড়ান্ত অনুমোদনকারী (১ম অনুমোদনকারী বা আবেদনকারী নয়) পুরোনো
+    // অ্যাকাউন্টের অনুমোদিত পেমেন্ট নতুন অ্যাকাউন্টে কপি করতে পারবে, একবারই (নির্দিষ্ট id)।
+    function isValidMigrationCopy(paymentId) {
+      let req = get(/databases/$(database)/documents/adminRequests/$(newData().migrationRequestId)).data;
+      let src = get(/databases/$(database)/documents/payments/$(newData().copiedFrom)).data;
+      return isAdmin() &&
+        newData().isCopiedRecord == true &&
+        paymentId == 'mig_' + newData().migrationRequestId + '_' + newData().copiedFrom &&
+        req.requestType == 'ACCOUNT_MIGRATION' &&
+        req.status == 'LEVEL_1_APPROVED' &&
+        request.auth.uid != req.get('firstApprovedBy', '') &&
+        request.auth.uid != req.requestedBy &&
+        src.userId == req.targetUserId &&
+        src.status == 'approved' &&
+        newData().userId == req.metadata.destinationUserId &&
+        newData().amount == src.amount &&
+        newData().status == 'approved';
+    }
+
     match /payments/{paymentId} {
       allow read: if isAuthenticated();
-      allow create: if isValidPaymentCreate() || isValidManualEntry();
+      allow create: if isValidPaymentCreate() || isValidManualEntry() || isValidMigrationCopy(paymentId);
       allow update: if isMemberPaymentEdit() || isAdminPaymentDecision();
       // অনুমোদিত পেমেন্ট কখনো মুছবে না; ভুল হলে সংশোধনী এন্ট্রি দিতে হবে
       allow delete: if isSuperAdmin() && resource.data.status != 'approved';
@@ -236,7 +255,12 @@ service cloud.firestore {
           // সাধারণ মেম্বার শুধু নিজের জন্য PIN রিসেট বা স্লট বাড়ানোর আবেদন করতে পারবে
           (newData().requestType in ['PIN_RESET', 'SLOT_INCREASE'] && newData().targetUserId == request.auth.uid)
         );
-      allow update: if isAdmin() && request.auth.uid != resource.data.get('requestedBy', '');
+      // অন্য অ্যাডমিন অনুমোদন/বাতিল করবে; আবেদনকারী অ্যাডমিন শুধু নিজের আবেদন বাতিল করতে পারবে
+      allow update: if isAdmin() && (
+        request.auth.uid != resource.data.get('requestedBy', '') ||
+        (newData().status == 'REJECTED' &&
+          changedKeys().hasOnly(['status', 'rejectedBy', 'rejectedByName', 'rejectedAt']))
+      );
       allow delete: if isSuperAdmin();
     }
 

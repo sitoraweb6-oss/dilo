@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
 import { db } from '../lib/firebase';
 import { collection, query, getDocs, addDoc, serverTimestamp, where } from 'firebase/firestore';
@@ -9,7 +9,8 @@ import { getMemberSlotSummary } from '../lib/paymentUtils';
 
 export function AccountMigration() {
   const navigate = useNavigate();
-  const { userProfile, isAdmin } = useAuth();
+  const { userProfile, isAdmin, isSuperAdmin } = useAuth();
+  const [searchParams] = useSearchParams();
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -28,19 +29,26 @@ export function AccountMigration() {
   const [reason, setReason] = useState('');
   
   useEffect(() => {
-    if (!isAdmin || userProfile?.role !== 'super_admin') {
+    if (!isAdmin || !isSuperAdmin) {
       navigate('/');
       return;
     }
     const fetchUsers = async () => {
       const snap = await getDocs(collection(db, 'users'));
-      setAllUsers(snap.docs.map(d => d.data() as UserProfile));
+      // the doc id IS the user id (it is not stored inside the document)
+      const users = snap.docs.map(d => ({ ...(d.data() as UserProfile), id: d.id }));
+      setAllUsers(users);
+      const from = searchParams.get('from');
+      if (from) {
+        const u = users.find(x => x.id === from);
+        if (u) setSelectedOld(u);
+      }
       
       const pSnap = await getDocs(collection(db, 'payments'));
       setPayments(pSnap.docs.map(d => ({ id: d.id, ...d.data() })));
     };
     fetchUsers();
-  }, [isAdmin, userProfile, navigate]);
+  }, [isAdmin, isSuperAdmin, userProfile, navigate]);
 
   const filteredOld = allUsers.filter(u => 
     u.id !== selectedNew?.id && 
@@ -245,6 +253,18 @@ export function AccountMigration() {
           />
         </div>
 
+        {selectedOld && (() => {
+          const approvedCount = payments.filter(p => p.userId === selectedOld.id && p.status === 'approved').length;
+          const pendingCount = payments.filter(p => p.userId === selectedOld.id && (p.status === 'pending' || p.status === 'level_1_approved')).length;
+          return (
+            <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 text-xs text-indigo-800 space-y-1">
+              <p>চূড়ান্ত অনুমোদনের পর <b>{approvedCount}টি অনুমোদিত পেমেন্ট</b> আর সব স্লট নতুন অ্যাকাউন্টে কপি হবে। পুরোনো রেকর্ড মুছবে না।</p>
+              {pendingCount > 0 && (
+                <p className="text-red-700 font-bold">⚠️ {pendingCount}টি পেমেন্ট এখনো অনুমোদনের অপেক্ষায় — এগুলো কপি হবে না। মাইগ্রেশনের আগে অনুমোদন বা বাতিল করে নিন।</p>
+              )}
+            </div>
+          );
+        })()}
         <button
           onClick={handleSubmit}
           disabled={loading || !selectedOld || !selectedNew || !reason.trim()}
