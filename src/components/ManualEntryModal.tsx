@@ -6,7 +6,7 @@ import { db } from '../lib/firebase';
 import { Payment, PaymentSettings, UserProfile } from '../types';
 import {
   buildMemberLedger, getPaymentCoverage, isActivePaymentStatus, monthLabelBn, monthListLabelBn,
-  toBnDigits, toMonthKey, lateFineFor, MonthLine,
+  toBnDigits, toMonthKey, lateFineFor, MonthLine, normalizeLegacyPayments,
 } from '../lib/ledger';
 
 const taka = (n: number) => `৳${Math.round(n).toLocaleString('en-IN')}`;
@@ -66,7 +66,7 @@ export function ManualEntryModal({
       // duplicate guard: re-read this member's payments from the server
       const snap = await getDocs(query(collection(db, 'payments'), where('userId', '==', member.id)));
       const taken = new Set<string>();
-      snap.docs.map(d => d.data() as Payment)
+      normalizeLegacyPayments(snap.docs.map(d => ({ id: d.id, ...d.data() } as Payment)), [member], settings)
         .filter(p => p.nameId === slotId && isActivePaymentStatus(p.status))
         .forEach(p => {
           const cov = getPaymentCoverage(p);

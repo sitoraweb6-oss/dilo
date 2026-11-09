@@ -5,7 +5,7 @@ import { CheckCircle2, Clock, AlertCircle, XCircle, FileSpreadsheet, ChevronDown
 import { db } from '../lib/firebase';
 import { Payment, PaymentSettings, UserProfile } from '../types';
 import {
-  buildMemberLedger, getPaymentCoverage, describePaymentBn, monthLabelBn, toBnDigits, toMonthKey, paidDateOf, MonthLine,
+  buildMemberLedger, getPaymentCoverage, describePaymentBn, monthLabelBn, toBnDigits, toMonthKey, paidDateOf, MonthLine, normalizeLegacyPayments,
 } from '../lib/ledger';
 
 const taka = (n: number) => `৳${Math.round(n).toLocaleString('en-IN')}`;
@@ -36,22 +36,25 @@ function useUserNames() {
  * - every transaction (including rejected) with its approval trail
  */
 export function MemberStatement({
-  member, payments, settings, showExport = true,
+  member, payments, settings, showExport = true, showSummary = true,
 }: {
   member: UserProfile;
   payments: Payment[];
   settings: PaymentSettings;
   showExport?: boolean;
+  /** hide the totals block where the page already shows them (personal tab) */
+  showSummary?: boolean;
 }) {
   const userNames = useUserNames();
-  const [openSlot, setOpenSlot] = useState<string | null>(member.names?.[0]?.nameId || null);
-  const [showAllTx, setShowAllTx] = useState(false);
+  const [slotId, setSlotId] = useState<string>(member.names?.[0]?.nameId || '');
+  const [openRow, setOpenRow] = useState<string | null>(null);
+  const [showAllMonths, setShowAllMonths] = useState(false);
+  const [showTx, setShowTx] = useState(false);
 
   const memberPayments = useMemo(
-    () => payments
-      .filter(p => p.userId === member.id)
+    () => normalizeLegacyPayments(payments.filter(p => p.userId === member.id), [member], settings)
       .sort((a, b) => (b.submittedAt?.toMillis?.() ?? 0) - (a.submittedAt?.toMillis?.() ?? 0) || b.month.localeCompare(a.month)),
-    [payments, member.id]
+    [payments, member, settings]
   );
   const ledger = useMemo(() => buildMemberLedger(member, memberPayments, settings), [member, memberPayments, settings]);
 
@@ -94,23 +97,16 @@ export function MemberStatement({
           <p>অনুমোদিত {fmtDay(p.approvedAt) && `• ${fmtDay(p.approvedAt)}`} (অনুমোদনকারীর তথ্য নেই)</p>
         )}
         {p.isCopiedRecord && <p className="text-indigo-600">মাইগ্রেশন থেকে কপি করা রেকর্ড</p>}
+        {p.autoAllocated && (
+          <p className="text-teal-700">
+            পুরোনো রেকর্ড: {monthLabelBn(p.month)}-এ দেওয়া {taka(p.amount || 0)} থেকে {p.coveredMonthsList?.length ? p.coveredMonthsList.map(m => monthLabelBn(m, false)).join(', ') : ''} মাসে সমন্বয় করা হয়েছে
+          </p>
+        )}
         {p.entryType === 'manual' && (
           <p className="text-indigo-600">ম্যানুয়াল এন্ট্রি দিয়েছেন: {nameOf(p.enteredBy, p.enteredByName)}{p.receivedDate ? ` • টাকা গ্রহণ: ${p.receivedDate.split('-').reverse().join('/')}` : ''}</p>
         )}
       </>
     );
-  };
-
-  const statusBadge = (s: MonthLine['status'], future: boolean) => {
-    const map: Record<string, [string, string]> = {
-      paid: [future ? 'অগ্রিম পরিশোধিত' : 'পরিশোধিত', 'bg-emerald-100 text-emerald-700'],
-      pending: ['অপেক্ষমাণ', 'bg-amber-100 text-amber-700'],
-      overdue: ['বকেয়া', 'bg-red-100 text-red-700'],
-      current: ['বাকি (চলতি)', 'bg-orange-100 text-orange-700'],
-      upcoming: ['—', 'bg-slate-100 text-slate-400'],
-    };
-    const [label, cls] = map[s];
-    return <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${cls}`}>{label}</span>;
   };
 
   const exportExcel = async () => {
@@ -165,145 +161,181 @@ export function MemberStatement({
     XLSX.writeFile(wb, `statement_${member.displayName.replace(/\s+/g, '_')}_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
   };
 
-  const txList = showAllTx ? memberPayments : memberPayments.slice(0, 5);
+  const slotLedger = ledger.slots.find(x => x.slot.nameId === slotId) || ledger.slots[0];
+  const currentMonth = toMonthKey(new Date());
+  const allLines: MonthLine[] = slotLedger
+    ? [...slotLedger.months, ...slotLedger.upcoming.filter(l => l.status === 'paid' || l.status === 'pending')]
+        .sort((a, b) => b.month.localeCompare(a.month))
+    : [];
+  const lines = showAllMonths ? allLines : allLines.slice(0, 6);
+
+  const pill = (label: string, cls: string) => (
+    <span className={`inline-block min-w-[64px] text-center px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap ${cls}`}>{label}</span>
+  );
+  const monthPill = (l: MonthLine) =>
+    l.status === 'paid' ? pill(l.month > currentMonth ? 'অগ্রিম' : 'পরিশোধিত', 'bg-emerald-100 text-emerald-700')
+    : l.status === 'pending' ? pill('অপেক্ষমাণ', 'bg-amber-100 text-amber-700')
+    : l.status === 'overdue' ? pill('বকেয়া', 'bg-red-100 text-red-700')
+    : l.status === 'current' ? pill('বাকি', 'bg-orange-100 text-orange-700')
+    : pill('—', 'bg-slate-100 text-slate-400');
+
+  const details = (p: Payment) => (
+    <div className="mt-2 rounded-xl bg-slate-50 border border-slate-100 p-3 text-[11px] text-slate-600 space-y-1">
+      <p>
+        জমা: <b className="text-slate-700">{paidDateOf(p) ? format(paidDateOf(p)!, 'dd/MM/yyyy') : monthLabelBn(p.month)}</b>
+        {p.paymentMethod ? ` • ${p.paymentMethod}` : ''}{p.transactionId ? ` • ${p.transactionId}` : ''}
+      </p>
+      <p>এই পেমেন্টে: {describePaymentBn(p)} — মোট {taka(p.amount || 0)}</p>
+      {approvalLine(p)}
+      {p.message ? <p>নোট: {p.message}</p> : null}
+    </div>
+  );
 
   return (
     <div className="space-y-5">
-      {/* Totals that add up */}
-      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+      {/* 1. Totals */}
+      {showSummary && (
+        <div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-3 text-center">
+              <p className="text-[10px] font-bold text-emerald-700">মোট জমা</p>
+              <p className="text-base font-black text-emerald-700 mt-0.5">{taka(totalApproved)}</p>
+            </div>
+            <div className={`rounded-2xl p-3 text-center border ${ledger.dueAmount > 0 ? 'bg-red-50 border-red-100' : 'bg-slate-50 border-slate-100'}`}>
+              <p className={`text-[10px] font-bold ${ledger.dueAmount > 0 ? 'text-red-600' : 'text-slate-500'}`}>বকেয়া</p>
+              <p className={`text-base font-black mt-0.5 ${ledger.dueAmount > 0 ? 'text-red-600' : 'text-slate-400'}`}>{ledger.dueAmount > 0 ? taka(ledger.dueAmount) : 'নেই'}</p>
+            </div>
+            <div className="rounded-2xl bg-amber-50 border border-amber-100 p-3 text-center">
+              <p className="text-[10px] font-bold text-amber-700">অপেক্ষমাণ</p>
+              <p className="text-base font-black text-amber-700 mt-0.5">{taka(pendingAmt)}</p>
+            </div>
+          </div>
+          <p className="text-[11px] text-slate-500 text-center mt-2">
+            মোট জমা = মাসিক {taka(monthly)} + জরিমানা {taka(fines)} + বার্ষিক {taka(annual)}{unallocated !== 0 ? ` + অন্যান্য ${taka(unallocated)}` : ''}
+          </p>
+        </div>
+      )}
+
+      {/* 2. Month by month */}
+      <div>
         <div className="flex items-center justify-between mb-2">
-          <p className="text-sm font-bold text-slate-800">হিসাবের সারাংশ</p>
+          <p className="text-sm font-bold text-slate-800">মাসভিত্তিক হিসাব</p>
           {showExport && (
-            <button onClick={exportExcel} className="flex items-center gap-1 text-xs font-bold text-green-700 bg-green-50 border border-green-100 px-2.5 py-1 rounded-full">
-              <FileSpreadsheet size={13} /> Excel
+            <button onClick={exportExcel} className="flex items-center gap-1 text-[11px] font-bold text-green-700 bg-green-50 border border-green-100 px-2.5 py-1 rounded-full">
+              <FileSpreadsheet size={12} /> Excel
             </button>
           )}
         </div>
-        <div className="text-sm space-y-1">
-          <div className="flex justify-between text-slate-600"><span>মাসিক চাঁদা</span><span>{taka(monthly)}</span></div>
-          <div className="flex justify-between text-slate-600"><span>জরিমানা</span><span>{taka(fines)}</span></div>
-          <div className="flex justify-between text-slate-600"><span>বার্ষিক চাঁদা</span><span>{taka(annual)}</span></div>
-          {unallocated !== 0 && (
-            <div className="flex justify-between text-slate-600"><span>অন্যান্য (পুরোনো রেকর্ড)</span><span>{taka(unallocated)}</span></div>
-          )}
-          <div className="h-px bg-slate-200 my-1" />
-          <div className="flex justify-between font-bold text-emerald-700"><span>মোট সঞ্চয় (অনুমোদিত)</span><span>{taka(totalApproved)}</span></div>
-          {pendingAmt > 0 && <div className="flex justify-between text-amber-700"><span>অনুমোদনের অপেক্ষায়</span><span>{taka(pendingAmt)}</span></div>}
-          <div className={`flex justify-between font-bold ${ledger.dueAmount > 0 ? 'text-red-600' : 'text-slate-500'}`}>
-            <span>বকেয়া</span><span>{ledger.dueAmount > 0 ? taka(ledger.dueAmount) : 'নেই'}</span>
-          </div>
-        </div>
-      </div>
 
-      {/* Month by month per slot */}
-      <div>
-        <p className="text-sm font-bold text-slate-800 mb-2">মাসভিত্তিক হিসাব</p>
-        <div className="space-y-2">
-          {ledger.slots.map(s => {
-            const lines = [
-              ...s.months,
-              ...s.upcoming.filter(l => l.status === 'paid' || l.status === 'pending'),
-            ].sort((a, b) => b.month.localeCompare(a.month));
-            const open = openSlot === s.slot.nameId;
-            return (
-              <div key={s.slot.nameId} className="border border-slate-200 rounded-2xl overflow-hidden">
-                <button onClick={() => setOpenSlot(open ? null : s.slot.nameId)} className="w-full flex items-center justify-between p-3 bg-white">
-                  <span className="text-sm font-bold text-slate-700">{s.slot.label} <span className="font-normal text-slate-400 text-xs">• {taka(s.slot.monthlyDue)}/মাস • শুরু {monthLabelBn(s.startMonth)}</span></span>
-                  <span className="flex items-center gap-2">
-                    {s.dueAmount > 0 && <span className="text-[11px] font-bold text-red-600">বকেয়া {taka(s.dueAmount)}</span>}
-                    <ChevronDown size={16} className={`text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
-                  </span>
-                </button>
-                {open && (
-                  <div className="divide-y divide-slate-100 border-t border-slate-100">
-                    {s.annual.map(a => (
-                      <div key={`a${a.year}`} className="p-3 text-xs bg-indigo-50/40">
-                        <div className="flex justify-between items-center">
-                          <span className="font-medium text-slate-700">বার্ষিক {toBnDigits(a.year)}</span>
-                          <span className="flex items-center gap-2">
-                            <span className="text-slate-700">{taka(a.amount)}</span>
-                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${a.status === 'paid' ? 'bg-emerald-100 text-emerald-700' : a.status === 'pending' ? 'bg-amber-100 text-amber-700' : a.status === 'overdue' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-500'}`}>
-                              {a.status === 'paid' ? 'পরিশোধিত' : a.status === 'pending' ? 'অপেক্ষমাণ' : a.status === 'overdue' ? 'বকেয়া' : 'এ বছরে দিতে হবে'}
-                            </span>
-                          </span>
-                        </div>
-                        {a.payment && <div className="text-[10px] text-slate-500 mt-1">জমা: {fmtDay(a.payment.submittedAt)} {approvalLine(a.payment)}</div>}
-                      </div>
-                    ))}
-                    {lines.map(l => {
-                      const part = l.payment ? getPaymentCoverage(l.payment).perMonth[l.month] : undefined;
-                      const amount = part ? part.base + part.fine : l.baseAmount + l.lateFine;
-                      const fine = part ? part.fine : l.lateFine;
-                      return (
-                        <div key={l.month} className="p-3 text-xs">
-                          <div className="flex justify-between items-center">
-                            <span className="font-medium text-slate-700">{monthLabelBn(l.month)}</span>
-                            <span className="flex items-center gap-2">
-                              <span className="text-slate-700">{taka(amount)}{fine > 0 && <span className="text-red-500"> (জরিমানা {taka(fine)})</span>}</span>
-                              {statusBadge(l.status, l.month > toMonthKey(new Date()))}
-                            </span>
-                          </div>
-                          {l.payment && (
-                            <div className="text-[10px] text-slate-500 mt-1 space-y-0.5">
-                              <p>জমা: {l.payment.receivedDate ? fmtDay({ toDate: () => paidDateOf(l.payment!)! }) : (fmtTs(l.payment.submittedAt) || monthLabelBn(l.payment.month))}{l.payment.paymentMethod ? ` • ${l.payment.paymentMethod}` : ''}{l.payment.transactionId ? ` • ${l.payment.transactionId}` : ''}</p>
-                              {approvalLine(l.payment)}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {lines.length === 0 && <p className="p-3 text-xs text-slate-400">কোনো মাস নেই</p>}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Every transaction with approval trail */}
-      <div>
-        <p className="text-sm font-bold text-slate-800 mb-2">সব লেনদেন ({toBnDigits(memberPayments.length)}টি)</p>
-        {memberPayments.length === 0 ? (
-          <p className="text-center text-slate-500 text-sm py-4 bg-slate-50 rounded-xl">কোনো পেমেন্ট রেকর্ড নেই</p>
-        ) : (
-          <div className="space-y-2">
-            {txList.map(p => (
-              <div key={p.id} className={`p-3 border rounded-xl ${p.status === 'rejected' ? 'bg-slate-50 border-slate-100 opacity-75' : 'bg-white border-slate-100 shadow-sm'}`}>
-                <div className="flex justify-between gap-3">
-                  <div className="flex gap-2 min-w-0">
-                    <span className="mt-0.5 shrink-0">
-                      {p.status === 'approved' ? <CheckCircle2 size={16} className="text-emerald-600" />
-                        : p.status === 'rejected' ? <XCircle size={16} className="text-red-500" />
-                        : p.status === 'level_1_approved' ? <AlertCircle size={16} className="text-blue-500" />
-                        : <Clock size={16} className="text-amber-500" />}
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-slate-800 leading-snug">
-                        {describePaymentBn(p)}
-                        {p.entryType === 'manual' && <span className="ml-1.5 align-middle text-[9px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">ম্যানুয়াল</span>}
-                      </p>
-                      <p className="text-[10px] text-slate-500">
-                        {slotLabel(p.nameId)} • জমা: {fmtTs(p.submittedAt) || monthLabelBn(p.month)}
-                        {p.paymentMethod ? ` • ${p.paymentMethod}` : ''}{p.transactionId ? ` • ${p.transactionId}` : ''}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <p className={`text-sm font-bold ${p.status === 'rejected' ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{taka(p.amount || 0)}</p>
-                    {(p.lateFine || 0) > 0 && <p className="text-[10px] text-red-500">জরিমানা {taka(p.lateFine || 0)}</p>}
-                  </div>
-                </div>
-                <div className="text-[10px] text-slate-500 mt-1.5 pl-6 space-y-0.5">{approvalLine(p)}
-                  {(p.status === 'pending') && <p className="text-amber-600">অনুমোদনের অপেক্ষায়</p>}
-                </div>
-              </div>
+        {ledger.slots.length > 1 && (
+          <div className="flex gap-1.5 mb-2 overflow-x-auto">
+            {ledger.slots.map(x => (
+              <button key={x.slot.nameId} onClick={() => { setSlotId(x.slot.nameId); setOpenRow(null); }}
+                className={`px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap ${x.slot.nameId === slotLedger?.slot.nameId ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                {x.slot.label}{x.dueAmount > 0 ? ' •' : ''}
+              </button>
             ))}
-            {memberPayments.length > 5 && (
-              <button onClick={() => setShowAllTx(v => !v)} className="w-full text-xs font-bold text-primary-700 py-2">
-                {showAllTx ? 'কম দেখান' : `সব ${toBnDigits(memberPayments.length)}টি দেখান`}
+          </div>
+        )}
+
+        {!slotLedger ? (
+          <p className="text-xs text-slate-400 text-center py-4">কোনো স্লট নেই</p>
+        ) : (
+          <div className="rounded-2xl border border-slate-200 overflow-hidden">
+            <div className="grid grid-cols-[1fr_auto_auto] gap-3 px-3 py-2 bg-slate-50 text-[10px] font-bold text-slate-500">
+              <span>মাস</span><span className="text-right">টাকা</span><span className="text-center min-w-[64px]">অবস্থা</span>
+            </div>
+            {slotLedger.annual.filter(a => a.status !== 'due' || a.year === String(new Date().getFullYear())).map(a => {
+              const key = `y${a.year}`;
+              const open = openRow === key;
+              return (
+                <div key={key} className="border-t border-slate-100">
+                  <button onClick={() => a.payment && setOpenRow(open ? null : key)} className="w-full grid grid-cols-[1fr_auto_auto] gap-3 items-center px-3 py-2.5 text-left">
+                    <span className="text-sm font-medium text-slate-800">বার্ষিক {toBnDigits(a.year)}</span>
+                    <span className="text-sm text-slate-700 text-right">{taka(a.amount)}</span>
+                    {a.status === 'paid' ? pill('পরিশোধিত', 'bg-emerald-100 text-emerald-700')
+                      : a.status === 'pending' ? pill('অপেক্ষমাণ', 'bg-amber-100 text-amber-700')
+                      : a.status === 'overdue' ? pill('বকেয়া', 'bg-red-100 text-red-700')
+                      : pill('দিতে হবে', 'bg-slate-100 text-slate-500')}
+                  </button>
+                  {open && a.payment && <div className="px-3 pb-3">{details(a.payment)}</div>}
+                </div>
+              );
+            })}
+            {lines.map(l => {
+              const part = l.payment ? getPaymentCoverage(l.payment).perMonth[l.month] : undefined;
+              const amount = part ? part.base + part.fine : l.baseAmount + l.lateFine;
+              const fine = part ? part.fine : l.lateFine;
+              const pd = l.payment ? paidDateOf(l.payment) : null;
+              const open = openRow === l.month;
+              return (
+                <div key={l.month} className="border-t border-slate-100">
+                  <button onClick={() => l.payment && setOpenRow(open ? null : l.month)} className="w-full grid grid-cols-[1fr_auto_auto] gap-3 items-center px-3 py-2.5 text-left">
+                    <span>
+                      <span className="block text-sm font-medium text-slate-800">{monthLabelBn(l.month)}</span>
+                      <span className="block text-[10px] text-slate-400">
+                        {pd ? `জমা ${format(pd, 'dd/MM/yyyy')}` : l.status === 'overdue' || l.status === 'current' ? 'এখনো দেওয়া হয়নি' : ''}
+                        {l.payment?.entryType === 'manual' ? ' • ম্যানুয়াল' : ''}
+                        {l.payment?.autoAllocated ? ' • সমন্বয়' : ''}
+                        {l.payment ? ' • বিস্তারিত ›' : ''}
+                      </span>
+                    </span>
+                    <span className="text-right">
+                      <span className="block text-sm text-slate-800">{taka(amount)}</span>
+                      {fine > 0 && <span className="block text-[10px] text-red-500">জরিমানা {taka(fine)}</span>}
+                    </span>
+                    {monthPill(l)}
+                  </button>
+                  {open && l.payment && <div className="px-3 pb-3">{details(l.payment)}</div>}
+                </div>
+              );
+            })}
+            {allLines.length > 6 && (
+              <button onClick={() => setShowAllMonths(v => !v)} className="w-full border-t border-slate-100 py-2 text-xs font-bold text-primary-700">
+                {showAllMonths ? 'কম দেখান' : `আরো ${toBnDigits(allLines.length - 6)} মাস দেখান`}
               </button>
             )}
+          </div>
+        )}
+      </div>
+
+      {/* 3. Every transaction (collapsed) */}
+      <div>
+        <button onClick={() => setShowTx(v => !v)} className="w-full flex items-center justify-between rounded-2xl border border-slate-200 px-3 py-2.5">
+          <span className="text-sm font-bold text-slate-800">সব লেনদেন ({toBnDigits(memberPayments.length)}টি)</span>
+          <ChevronDown size={16} className={`text-slate-400 transition-transform ${showTx ? 'rotate-180' : ''}`} />
+        </button>
+        {showTx && (
+          <div className="mt-2 space-y-2">
+            {memberPayments.length === 0 && <p className="text-center text-slate-500 text-sm py-4">কোনো পেমেন্ট নেই</p>}
+            {memberPayments.map(p => {
+              const key = `t${p.id}`;
+              const open = openRow === key;
+              const pd = paidDateOf(p);
+              return (
+                <div key={p.id} className={`rounded-xl border ${p.status === 'rejected' ? 'border-slate-100 bg-slate-50 opacity-70' : 'border-slate-100 bg-white'}`}>
+                  <button onClick={() => setOpenRow(open ? null : key)} className="w-full flex items-center gap-3 p-3 text-left">
+                    <span className="shrink-0">
+                      {p.status === 'approved' ? <CheckCircle2 size={18} className="text-emerald-600" />
+                        : p.status === 'rejected' ? <XCircle size={18} className="text-red-500" />
+                        : p.status === 'level_1_approved' ? <AlertCircle size={18} className="text-blue-500" />
+                        : <Clock size={18} className="text-amber-500" />}
+                    </span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm font-medium text-slate-800 truncate">{describePaymentBn(p)}</span>
+                      <span className="block text-[10px] text-slate-400">
+                        {pd ? format(pd, 'dd/MM/yyyy') : monthLabelBn(p.month)}
+                        {ledger.slots.length > 1 ? ` • ${slotLabel(p.nameId)}` : ''}
+                        {p.entryType === 'manual' ? ' • ম্যানুয়াল' : ''}
+                        {p.status === 'rejected' ? ' • বাতিল' : p.status === 'approved' ? '' : ' • অপেক্ষমাণ'}
+                      </span>
+                    </span>
+                    <span className={`text-sm font-bold shrink-0 ${p.status === 'rejected' ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{taka(p.amount || 0)}</span>
+                  </button>
+                  {open && <div className="px-3 pb-3">{details(p)}</div>}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

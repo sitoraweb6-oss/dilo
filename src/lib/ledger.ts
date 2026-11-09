@@ -269,13 +269,88 @@ export function buildSlotLedger(
   return { slot, startMonth, months, upcoming, annual, overdueMonths, dueAmount, pendingCount };
 }
 
+// ---------------------------------------------------------------------------
+// Old records: the previous app had no way to pay a missed month, so members who
+// paid two months at once (e.g. 2000 in October for September + October) were
+// stored as a single "October" payment, or as two payments both marked October.
+// Here we move that extra money to the OLDEST unpaid month(s) of the same slot,
+// up to the month it was paid. Only old-format records are touched, nothing is
+// written to the database, and such payments are flagged `autoAllocated`.
+// ---------------------------------------------------------------------------
+
+const isLegacyMonthly = (p: Payment) =>
+  !(p.monthBreakdown && p.monthBreakdown.length) && !(p.annualYears && p.annualYears.length) && p.paymentType !== 'annual';
+
+const submittedMs = (p: Payment) => p.submittedAt?.toMillis?.() ?? (p.submittedAt?.toDate ? p.submittedAt.toDate().getTime() : 0);
+
+export function normalizeLegacyPayments(
+  payments: Payment[],
+  members: UserProfile[],
+  settings: PaymentSettings,
+  today: Date = new Date()
+): Payment[] {
+  const replaced = new Map<string, Payment>();
+  const current = toMonthKey(today);
+
+  members.forEach(member => {
+    (member.names || []).forEach(slot => {
+      const due = slot.monthlyDue || settings.monthlyFee || 0;
+      if (due <= 0) return;
+      const start = slotStartMonth(slot, settings, current);
+      const slotPays = payments
+        .filter(p => p.userId === member.id && p.nameId === slot.nameId && isActivePaymentStatus(p.status))
+        .sort((a, b) => (a.month || '').localeCompare(b.month || '') || submittedMs(a) - submittedMs(b));
+
+      // months already paid by new-format payments are never touched
+      const covered = new Set<MonthKey>();
+      slotPays.filter(p => !isLegacyMonthly(p)).forEach(p => getPaymentCoverage(p).months.forEach(m => covered.add(m)));
+
+      slotPays.filter(isLegacyMonthly).forEach(p => {
+        const original = (p.coveredMonthsList && p.coveredMonthsList.length ? [...p.coveredMonthsList] : (p.month ? [p.month] : [])).sort();
+        const fine = p.lateFine || 0;
+        // the money actually received decides, even if an old record's baseAmount says otherwise
+        let money = Math.max((p.amount || 0) - fine, p.baseAmount || 0);
+        const alloc: MonthKey[] = [];
+
+        // 1) its own month(s) first, if not already paid by another record
+        original.forEach(m => {
+          if (!covered.has(m) && money >= due) { alloc.push(m); covered.add(m); money -= due; }
+        });
+        // 2) extra money -> oldest unpaid month from the slot start up to when it was paid
+        const lastMonth = [p.month, ...original].filter(Boolean).sort().pop() || current;
+        if (money >= due) {
+          for (const m of monthRange(start, lastMonth)) {
+            if (money < due) break;
+            if (!covered.has(m)) { alloc.push(m); covered.add(m); money -= due; }
+          }
+        }
+
+        const unchanged = alloc.length === original.length && alloc.every((m, i) => m === original[i]) && money < 1;
+        if (unchanged) return;
+
+        alloc.sort();
+        const fineMonth = original.find(m => alloc.includes(m)) || alloc[alloc.length - 1];
+        replaced.set(p.id, {
+          ...p,
+          coveredMonthsList: alloc,
+          monthBreakdown: alloc.map(m => ({ month: m, baseAmount: due, lateFine: m === fineMonth ? fine : 0 })),
+          autoAllocated: true,
+          originalMonths: original,
+        });
+      });
+    });
+  });
+
+  return replaced.size ? payments.map(p => replaced.get(p.id) || p) : payments;
+}
+
 export function buildMemberLedger(
   member: UserProfile,
   allPayments: Payment[],
   settings: PaymentSettings,
   today: Date = new Date()
 ): MemberLedger {
-  const memberPayments = allPayments.filter(p => p.userId === member.id);
+  const memberPayments = normalizeLegacyPayments(allPayments.filter(p => p.userId === member.id), [member], settings, today);
   const slots = (member.names || []).map(s => buildSlotLedger(member, s, memberPayments, settings, today));
   const overdueMonths = slots.reduce((s, l) => s + l.overdueMonths, 0);
   const dueAmount = slots.reduce((s, l) => s + l.dueAmount, 0);
