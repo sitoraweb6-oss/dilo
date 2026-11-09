@@ -20,6 +20,8 @@ import { MemberProfileModal } from '../../components/MemberProfileModal';
 import { Bell, ArrowRight, UserPlus, Receipt, Vote, Megaphone, TrendingUp } from 'lucide-react';
 
 import { getMemberStatus, getSystemSlotSummary, getMemberSlotSummary } from '../../lib/paymentUtils';
+import { receivedInMonth } from '../../lib/ledger';
+import { useMemberLedger } from '../../lib/useLedger';
 
 import { PendingApprovalsSection } from '../../components/home/PendingApprovalsSection';
 import { UpcomingEventSection } from '../../components/home/UpcomingEventSection';
@@ -38,6 +40,7 @@ export function HomeTab() {
   const [selectedMember, setSelectedMember] = useState<UserProfile | null>(null);
 
   const currentMonth = format(new Date(), 'yyyy-MM');
+  const { ledger: myLedger, settings: myLedgerSettings } = useMemberLedger(userProfile);
   const mySlotSummary = userProfile ? getMemberSlotSummary(userProfile, payments, currentMonth) : null;
   const myPaymentStatus = mySlotSummary?.status || 'approved';
 
@@ -66,7 +69,7 @@ export function HomeTab() {
         setPayments(Array.from(paymentsMap.values()));
         
         let total = 0;
-        totalSnap.docs.forEach(doc => { total += doc.data().amount || 0; });
+        totalSnap.docs.forEach(doc => { if (!doc.data().isCopiedRecord) total += doc.data().amount || 0; });
         setTotalSystemSavings(total);
         
         setNotices(noticesSnap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -84,15 +87,12 @@ export function HomeTab() {
 
 
 
-  const getDueAmount = () => {
-    if (!userProfile) return 0;
-    const memberSummary = getMemberSlotSummary(userProfile, payments.filter(p => p.userId === userProfile.id), currentMonth);
-    return memberSummary.totalDueAmount;
-  };
+  const getDueAmount = () => myLedger?.dueAmount || 0;
 
   const slotSummary = getSystemSlotSummary(members, payments, currentMonth);
   
-  const monthlyCollection = payments.filter(p => p.status === 'approved').reduce((sum, p) => sum + p.amount, 0);
+  // money actually received this month (by submission month), copies excluded
+  const monthlyCollection = receivedInMonth(currentMonth, payments);
   const paidMembersList = members.filter(m => getMemberSlotSummary(m, payments, currentMonth).paidSlots > 0);
 
   if (loading) {
@@ -121,6 +121,7 @@ export function HomeTab() {
         paymentStatus={myPaymentStatus} 
         dueAmount={getDueAmount()} 
         onPayClick={navigateToPersonal}
+        dueDay={myLedgerSettings.dueDate}
       />
 
       {/* 4. Monthly Unity Progress */}

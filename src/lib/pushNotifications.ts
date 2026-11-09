@@ -1,5 +1,5 @@
 import { getToken, onMessage } from 'firebase/messaging';
-import { getFirebaseMessaging, db } from './firebase';
+import { getFirebaseMessaging, db, auth } from './firebase';
 import { doc, updateDoc, arrayUnion } from 'firebase/firestore';
 
 // Public VAPID Key for Web Push (Optional but recommended, otherwise FCM uses default)
@@ -56,10 +56,13 @@ export const setupForegroundListener = async () => {
 export const sendNotification = async (tokens: string[], title: string, body: string, data?: any) => {
   if (!tokens || tokens.length === 0) return;
   try {
+    const idToken = await auth.currentUser?.getIdToken();
+    if (!idToken) return;
     const response = await fetch('/api/send-notification', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idToken}`,
       },
       body: JSON.stringify({
         tokens,

@@ -4,6 +4,7 @@ import { db } from './firebase';
 import { format } from 'date-fns';
 import { Payment, UserProfile } from '../types';
 import { getMemberSlotSummary } from './paymentUtils';
+import { getPaymentCoverage } from './ledger';
 
 export function useCurrentMonthPayments() {
   const [currentMonthPayments, setCurrentMonthPayments] = useState<Payment[]>([]);
@@ -36,10 +37,12 @@ export function useCurrentMonthPayments() {
   }, [currentMonth]);
 
   const getSlotPaymentStatus = (userId: string, nameId: string): 'approved' | 'pending' | 'not_submitted' => {
-    const slotPayment = currentMonthPayments.find(p => p.userId === userId && p.nameId === nameId);
-    if (!slotPayment) return 'not_submitted';
-    if (slotPayment.status === 'rejected') return 'not_submitted';
-    return slotPayment.status === 'level_1_approved' ? 'pending' : (slotPayment.status as 'approved' | 'pending');
+    const slotPayments = currentMonthPayments.filter(p =>
+      p.userId === userId && p.nameId === nameId && getPaymentCoverage(p).months.includes(currentMonth)
+    );
+    if (slotPayments.some(p => p.status === 'approved')) return 'approved';
+    if (slotPayments.some(p => p.status === 'pending' || p.status === 'level_1_approved')) return 'pending';
+    return 'not_submitted';
   };
 
   const getMemberPaymentStatus = (member: UserProfile): 'approved' | 'partial' | 'pending' | 'not_submitted' => {

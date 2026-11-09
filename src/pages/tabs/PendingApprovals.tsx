@@ -5,6 +5,8 @@ import { db } from '../../lib/firebase';
 import { doc, updateDoc, addDoc, collection, serverTimestamp, writeBatch, runTransaction } from 'firebase/firestore';
 import { Payment, UserProfile } from '../../types';
 import { CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
+import { describePaymentBn, getPaymentCoverage, monthLabelBn, lateFineFor, toMonthKey } from '../../lib/ledger';
+import { usePaymentSettings } from '../../lib/usePaymentSettings';
 import { format } from 'date-fns';
 import { sendPushNotificationToUsers } from '../../lib/pushNotifications';
 
@@ -17,6 +19,7 @@ export const PendingMemberItem: React.FC<{ member: UserProfile, currentUser: Use
       setLoading(true);
       await updateDoc(doc(db, 'users', member.id), { status: 'active', role: isAdmin ? role : 'member' });
       await addDoc(collection(db, 'activityLog'), {
+        actorId: currentUser.id,
         description: `${currentUser.displayName} নতুন সদস্য ${member.displayName}-কে অনুমোদন দিয়েছেন`,
         timestamp: serverTimestamp(),
       });
@@ -32,6 +35,7 @@ export const PendingMemberItem: React.FC<{ member: UserProfile, currentUser: Use
       setLoading(true);
       await updateDoc(doc(db, 'users', member.id), { status: 'rejected' });
       await addDoc(collection(db, 'activityLog'), {
+        actorId: currentUser.id,
         description: `${currentUser.displayName} নতুন সদস্য ${member.displayName}-এর অনুরোধ বাতিল করেছেন`,
         timestamp: serverTimestamp(),
       });
@@ -94,6 +98,18 @@ export const PendingMemberItem: React.FC<{ member: UserProfile, currentUser: Use
 
 export const PendingPaymentItem: React.FC<{ payment: Payment, user?: UserProfile, currentUser: UserProfile, usersMap?: Record<string, UserProfile>, onComplete?: () => void }> = ({ payment, user, currentUser, usersMap, onComplete }) => {
   const isAdmin = hasPermission(currentUser, 'admin');
+  const { settings: paySettings } = usePaymentSettings();
+
+  // The member's phone decides the fine at submission time. Re-check it against the
+  // server timestamp so a wrong phone date can't be used to skip a fine.
+  const fineWarning = (() => {
+    const submitted = payment.submittedAt?.toDate ? payment.submittedAt.toDate() : null;
+    if (!submitted || !payment.monthBreakdown?.length) return null;
+    const expected = payment.monthBreakdown.reduce((s, b) => s + lateFineFor(b.month, paySettings, submitted), 0);
+    const charged = payment.monthBreakdown.reduce((s, b) => s + (b.lateFine || 0), 0);
+    if (expected === charged) return null;
+    return { expected, charged, submittedMonth: toMonthKey(submitted), declaredMonth: payment.month };
+  })();
   
   const [loading, setLoading] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -139,7 +155,7 @@ export const PendingPaymentItem: React.FC<{ payment: Payment, user?: UserProfile
           
           const logRef = doc(collection(db, 'activityLog'));
           transaction.set(logRef, {
-            description: `${currentUser.displayName} একটি ${payment.paymentType === 'advance' ? 'অগ্রিম' : 'মাসিক'} প্রদেয় অনুমোদন করেছেন। প্রথম অনুমোদন সম্পন্ন হয়েছে।`,
+            description: `${currentUser.displayName} একটি (${describePaymentBn(payment)}) প্রদেয় অনুমোদন করেছেন। প্রথম অনুমোদন সম্পন্ন হয়েছে।`,
             action: 'PAYMENT_FIRST_APPROVED',
             paymentId: payment.id,
             actorId: currentUser.id,
@@ -164,7 +180,7 @@ export const PendingPaymentItem: React.FC<{ payment: Payment, user?: UserProfile
           
           const logRef = doc(collection(db, 'activityLog'));
           transaction.set(logRef, {
-            description: `${currentUser.displayName} একটি ${payment.paymentType === 'advance' ? 'অগ্রিম' : 'মাসিক'} প্রদেয় অনুমোদন করেছেন। দ্বিতীয় অনুমোদন সম্পন্ন হয়েছে।`,
+            description: `${currentUser.displayName} একটি (${describePaymentBn(payment)}) প্রদেয় অনুমোদন করেছেন। দ্বিতীয় অনুমোদন সম্পন্ন হয়েছে।`,
             action: 'PAYMENT_FULLY_APPROVED',
             paymentId: payment.id,
             actorId: currentUser.id,
@@ -200,11 +216,12 @@ export const PendingPaymentItem: React.FC<{ payment: Payment, user?: UserProfile
         status: 'rejected',
         rejectReason: rejectReason,
         rejectedBy: currentUser.id,
+        rejectedByName: currentUser.displayName || '',
         rejectedAt: serverTimestamp()
       });
       const logRef = doc(collection(db, 'activityLog'));
       batch.set(logRef, {
-        description: `${currentUser.displayName} ${user?.displayName || 'সদস্য'}-এর ${payment.paymentType === 'advance' ? 'অগ্রিম' : 'মাসিক'} প্রদেয় বাতিল করেছেন। কারণ: ${rejectReason}`,
+        description: `${currentUser.displayName} ${user?.displayName || 'সদস্য'}-এর (${describePaymentBn(payment)}) প্রদেয় বাতিল করেছেন। কারণ: ${rejectReason}`,
         action: 'PAYMENT_REJECTED',
         paymentId: payment.id,
         actorId: currentUser.id,
@@ -240,17 +257,29 @@ export const PendingPaymentItem: React.FC<{ payment: Payment, user?: UserProfile
             )}
           </div>
         </div>
-        <p className="text-[10px] text-slate-500">
-          {format(new Date(payment.month + '-01'), 'MMM yyyy')} • ৳{payment.amount}
+        <p className="text-xs font-bold text-slate-700 mt-1">
+          {describePaymentBn(payment)} • ৳{payment.amount}
         </p>
         <div className="mt-1 text-[10px] text-slate-600 space-y-0.5">
-          <p><strong>Payment Type:</strong> <span className={payment.paymentType === 'annual' ? 'text-primary-600 font-bold' : payment.paymentType === 'advance' ? 'text-emerald-600 font-bold' : ''}>{payment.paymentType === 'annual' ? 'Annual (বার্ষিক)' : payment.paymentType === 'advance' ? 'Advance (অগ্রিম)' : 'Monthly (মাসিক)'}</span></p>
-          {payment.paymentType === 'advance' && payment.coveredMonthsList && (
-            <p><strong>Covered Months:</strong> {payment.coveredMonthsList.map(m => format(new Date(m + '-01'), 'MMM yyyy')).join(', ')}</p>
+          {fineWarning && (
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-2 my-1 text-[11px] font-medium">
+              ⚠️ জরিমানা মিলছে না: জমার সার্ভার-সময় অনুযায়ী জরিমানা হওয়ার কথা ৳{fineWarning.expected}, কিন্তু ধরা হয়েছে ৳{fineWarning.charged}।
+              {fineWarning.submittedMonth !== fineWarning.declaredMonth && ' (মেম্বারের ফোনের তারিখ ভুল থাকতে পারে)'}
+              {' '}টাকা যাচাই করে প্রয়োজনে বাতিল করুন।
+            </div>
           )}
+          <p><strong>স্লট:</strong> {user?.names?.find(n => n.nameId === payment.nameId)?.label || payment.nameId}</p>
           <p><strong>Member ID:</strong> {user?.id}</p>
-          {payment.paymentType !== 'annual' && <p><strong>Base Monthly Fee:</strong> ৳{payment.baseAmount || 0}</p>}
-          {payment.paymentType !== 'annual' && <p><strong>Late Fee:</strong> ৳{payment.lateFine || 0}</p>}
+          {getPaymentCoverage(payment).months.length > 0 && (
+            <div className="bg-slate-50 rounded-lg p-2 my-1 border border-slate-100">
+              {Object.entries(getPaymentCoverage(payment).perMonth).sort(([x], [y]) => x.localeCompare(y)).map(([m, v]) => (
+                <p key={m} className="flex justify-between"><span>{monthLabelBn(m)}</span><span>৳{Math.round(v.base)}{v.fine > 0 ? ` + জরিমানা ৳${Math.round(v.fine)}` : ''}</span></p>
+              ))}
+              {getPaymentCoverage(payment).annualYears.map(y => (
+                <p key={y} className="flex justify-between"><span>বার্ষিক {y}</span><span>৳{Math.round(getPaymentCoverage(payment).perAnnual[y] || 0)}</span></p>
+              ))}
+            </div>
+          )}
           <p><strong>Total Amount:</strong> ৳{payment.amount}</p>
           <p><strong>Submission Date:</strong> {payment.submittedAt ? format(payment.submittedAt.toDate(), 'dd MMM yyyy, hh:mm a') : 'N/A'}</p>
           {payment.firstApprovedBy && (

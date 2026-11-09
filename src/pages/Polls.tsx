@@ -67,6 +67,7 @@ export function Polls() {
       });
 
       await addDoc(collection(db, 'activityLog'), {
+        actorId: userProfile?.id,
         description: `${userProfile.displayName} একটি নতুন পোল তৈরি করেছেন: "${question}"`,
         timestamp: serverTimestamp(),
       });

@@ -7,7 +7,7 @@ import { usePaymentSettings, DEFAULT_PAYMENT_SETTINGS } from '../lib/usePaymentS
 import { ArrowLeft, Save } from 'lucide-react';
 
 export function AdminPaymentSettings() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
   const { settings, loading, exists } = usePaymentSettings();
   
@@ -44,7 +44,8 @@ export function AdminPaymentSettings() {
         isAnnualPaymentEnabled: Boolean(formData.isAnnualPaymentEnabled),
         annualAmount: Number(formData.annualAmount),
         annualEligibleMonths: formData.annualEligibleMonths || [],
-      });
+        ...(isSuperAdmin ? { ledgerStartMonth: formData.ledgerStartMonth || null } : {}),
+      }, { merge: true });
       alert('Settings saved successfully!');
     } catch (error) {
       console.error(error);
@@ -98,6 +99,23 @@ export function AdminPaymentSettings() {
               <input type="number" value={formData.secondPenaltyAmount} onChange={e => setFormData({...formData, secondPenaltyAmount: Number(e.target.value)})} className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary-500 outline-none" />
             </div>
           
+            <div className="pt-4 border-t border-slate-200 mt-4">
+              <h2 className="font-bold text-slate-800 text-base mb-1">হিসাব শুরুর মাস</h2>
+              <p className="text-xs text-slate-500 mb-3">
+                এই মাসের আগের কোনো মাস বকেয়া হিসেবে ধরা হবে না। যে মাস থেকে সব পেমেন্ট অ্যাপে এন্ট্রি আছে, সেই মাস দিন।
+                কোনো সদস্য পরে যোগ দিলে তার যোগদানের মাস থেকে হিসাব শুরু হবে।
+              </p>
+              <input
+                type="month"
+                value={formData.ledgerStartMonth || ''}
+                disabled={!isSuperAdmin}
+                onChange={e => setFormData({ ...formData, ledgerStartMonth: e.target.value })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm focus:ring-2 focus:ring-primary-500 outline-none disabled:opacity-60"
+              />
+              {!isSuperAdmin && <p className="text-[11px] text-amber-600 mt-1">শুধু সুপার অ্যাডমিন এটি পরিবর্তন করতে পারবেন।</p>}
+              {!formData.ledgerStartMonth && <p className="text-[11px] text-red-600 mt-1">এখনো সেট করা হয়নি — পুরোনো সদস্যদের হিসাব শুধু চলতি মাস থেকে ধরা হচ্ছে।</p>}
+            </div>
+
             <div className="pt-4 border-t border-slate-200 mt-4">
               <h2 className="font-bold text-slate-800 text-base mb-3">Annual Payment Settings</h2>
               

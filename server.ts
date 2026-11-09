@@ -37,18 +37,39 @@ app.post("/api/send-notification", async (req, res) => {
     return res.status(503).json({ success: false, message: "Firebase Admin is not configured. Missing FIREBASE_SERVICE_ACCOUNT_KEY.", error: "Firebase Admin is not configured. Missing FIREBASE_SERVICE_ACCOUNT_KEY." });
   }
 
+  // Only a logged-in, active admin may send notifications
+  const authHeader = req.headers.authorization || '';
+  const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : req.body?.idToken;
+  if (!idToken) {
+    return res.status(401).json({ success: false, message: "Not signed in", error: "Not signed in" });
+  }
+  try {
+    const decodedToken = await getAuth().verifyIdToken(idToken);
+    const callerDoc = await getFirestore().collection('users').doc(decodedToken.uid).get();
+    const caller = callerDoc.data() || {};
+    const perms: string[] = Array.isArray(caller.permissions) ? caller.permissions.map((p: string) => String(p).toLowerCase()) : [];
+    const role = String(caller.role || '').toLowerCase();
+    const isActive = (caller.status ?? 'active') === 'active';
+    const isAdmin = role === 'admin' || role === 'super_admin' || perms.includes('admin') || perms.includes('super_admin');
+    if (!callerDoc.exists || !isActive || !isAdmin) {
+      return res.status(403).json({ success: false, message: "Unauthorized", error: "Unauthorized" });
+    }
+  } catch (error: any) {
+    return res.status(401).json({ success: false, message: "Invalid token", error: "Invalid token" });
+  }
+
   const { title, body, tokens, data } = req.body;
 
-  if (!tokens || !tokens.length) {
+  if (!Array.isArray(tokens) || !tokens.length) {
     return res.status(400).json({ success: false, message: "No tokens provided", error: "No tokens provided" });
+  }
+  if (tokens.length > 500 || typeof title !== 'string' || typeof body !== 'string' || title.length > 200 || body.length > 1000) {
+    return res.status(400).json({ success: false, message: "Invalid notification", error: "Invalid notification" });
   }
 
   try {
     const message = {
-      notification: {
-        title,
-        body,
-      },
+      notification: { title, body },
       data: data || {},
       tokens: tokens, // Multicast message
     };
@@ -60,8 +81,6 @@ app.post("/api/send-notification", async (req, res) => {
     res.status(500).json({ success: false, message: error.message, error: error.message });
   }
 });
-
-
 
 app.post("/api/admin/update-user-email", async (req, res) => {
   if (!adminInitialized) {
@@ -77,7 +96,7 @@ app.post("/api/admin/update-user-email", async (req, res) => {
     if (!userDoc.exists) {
       return res.status(403).json({ success: false, message: "User not found", error: "User not found" });
     }
-    const role = userDoc.data()?.role?.toLowerCase();
+    const role = (userDoc.data()?.status ?? 'active') === 'active' ? userDoc.data()?.role?.toLowerCase() : undefined;
     if (role !== 'admin' && role !== 'super_admin') {
       return res.status(403).json({ success: false, message: "Unauthorized", error: "Unauthorized" });
     }
@@ -107,7 +126,7 @@ app.get("/api/admin/recovery-requests", async (req, res) => {
     const decodedToken = await getAuth().verifyIdToken(idToken);
     const userDoc = await getFirestore().collection('users').doc(decodedToken.uid).get();
     if (!userDoc.exists) return res.status(403).json({ success: false, message: "User not found", error: "User not found" });
-    const role = userDoc.data()?.role?.toLowerCase();
+    const role = (userDoc.data()?.status ?? 'active') === 'active' ? userDoc.data()?.role?.toLowerCase() : undefined;
     if (role !== 'admin' && role !== 'super_admin') return res.status(403).json({ success: false, message: "Unauthorized", error: "Unauthorized" });
     
     const snapshot = await getFirestore().collection('recoveryRequests').orderBy('requestedAt', 'desc').get();
@@ -130,7 +149,7 @@ app.get("/api/admin/get-user-email", async (req, res) => {
     const decodedToken = await getAuth().verifyIdToken(idToken);
     const userDoc = await getFirestore().collection('users').doc(decodedToken.uid).get();
     if (!userDoc.exists) return res.status(403).json({ success: false, message: "User not found", error: "User not found" });
-    const role = userDoc.data()?.role?.toLowerCase();
+    const role = (userDoc.data()?.status ?? 'active') === 'active' ? userDoc.data()?.role?.toLowerCase() : undefined;
     if (role !== 'admin' && role !== 'super_admin') return res.status(403).json({ success: false, message: "Unauthorized", error: "Unauthorized" });
     
     const userRecord = await getAuth().getUser(targetUid);
@@ -148,7 +167,7 @@ app.post("/api/admin/create-recovery-request", async (req, res) => {
     const decodedToken = await getAuth().verifyIdToken(idToken);
     const db = getFirestore();
     const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-    const role = userDoc.data()?.role?.toLowerCase();
+    const role = (userDoc.data()?.status ?? 'active') === 'active' ? userDoc.data()?.role?.toLowerCase() : undefined;
     if (role !== 'admin' && role !== 'super_admin') return res.status(403).json({ success: false, message: "Unauthorized", error: "Unauthorized" });
     
     // Check pending
@@ -195,7 +214,7 @@ app.post("/api/admin/approve-recovery-request", async (req, res) => {
     const decodedToken = await getAuth().verifyIdToken(idToken);
     const db = getFirestore();
     const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-    const role = userDoc.data()?.role?.toLowerCase();
+    const role = (userDoc.data()?.status ?? 'active') === 'active' ? userDoc.data()?.role?.toLowerCase() : undefined;
     if (role !== 'admin' && role !== 'super_admin') return res.status(403).json({ success: false, message: "Unauthorized", error: "Unauthorized" });
     
     const reqRef = db.collection('recoveryRequests').doc(requestId);
@@ -241,7 +260,7 @@ app.post("/api/admin/reject-recovery-request", async (req, res) => {
     const decodedToken = await getAuth().verifyIdToken(idToken);
     const db = getFirestore();
     const userDoc = await db.collection('users').doc(decodedToken.uid).get();
-    const role = userDoc.data()?.role?.toLowerCase();
+    const role = (userDoc.data()?.status ?? 'active') === 'active' ? userDoc.data()?.role?.toLowerCase() : undefined;
     if (role !== 'admin' && role !== 'super_admin') return res.status(403).json({ success: false, message: "Unauthorized", error: "Unauthorized" });
     
     const reqRef = db.collection('recoveryRequests').doc(requestId);

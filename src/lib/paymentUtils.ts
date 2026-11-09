@@ -1,4 +1,5 @@
 import { Payment, UserProfile } from '../types';
+import { getPaymentCoverage } from './ledger';
 
 export interface SlotSummary {
   totalSlots: number;
@@ -28,13 +29,13 @@ export function getMemberSlotSummary(member: UserProfile, currentMonthPayments: 
 
   member.names.forEach(slot => {
     // If a payment exists and is not rejected
-    const slotPayments = currentMonthPayments.filter(p => {
-      if (p.userId !== member.id || p.nameId !== slot.nameId || p.paymentType === 'annual') return false;
-      if (p.paymentType === 'advance') {
-        return p.coveredMonthsList && p.coveredMonthsList.includes(targetMonth);
-      }
-      return true;
-    });
+    // Skip slots that had not started yet in the target month
+    if (slot.activeFromMonth && slot.activeFromMonth > targetMonth) return;
+    // A payment counts for the month it PAYS FOR (coverage), not the month it was submitted
+    const slotPayments = currentMonthPayments.filter(p =>
+      p.userId === member.id && p.nameId === slot.nameId &&
+      getPaymentCoverage(p).months.includes(targetMonth)
+    );
     
     // Pick the most relevant payment (approved > pending > rejected)
     let slotPayment = slotPayments.find(p => p.status === 'approved');
@@ -54,7 +55,7 @@ export function getMemberSlotSummary(member: UserProfile, currentMonthPayments: 
 
   let status: 'approved' | 'partial' | 'pending' | 'not_submitted' = 'not_submitted';
   
-  if (paidSlots === member.names.length) {
+  if (paidSlots === paidSlots + dueSlots + pendingSlots) {
     status = 'approved';
   } else if (paidSlots > 0) {
     status = 'partial';
@@ -65,7 +66,7 @@ export function getMemberSlotSummary(member: UserProfile, currentMonthPayments: 
   }
 
   return {
-    totalSlots: member.names.length,
+    totalSlots: paidSlots + dueSlots + pendingSlots,
     paidSlots,
     dueSlots,
     pendingSlots,
@@ -107,45 +108,4 @@ export function getSystemSlotSummary(members: UserProfile[], currentMonthPayment
   });
 
   return { totalSlots, paidSlots, dueSlots, pendingSlots };
-}
-
-import { PaymentSettings } from '../types';
-export function calculatePaymentDetails(baseAmount: number, settings: PaymentSettings, targetMonthStr?: string) {
-  const d = new Date();
-  
-  if (targetMonthStr) {
-    const currentYear = d.getFullYear();
-    const currentMonthNum = d.getMonth() + 1; // 1-based
-    
-    const [targetYearStr, targetMonthNumStr] = targetMonthStr.split('-');
-    const targetYear = parseInt(targetYearStr, 10);
-    const targetMonth = parseInt(targetMonthNumStr, 10);
-    
-    // Future month -> No fine
-    if (targetYear > currentYear || (targetYear === currentYear && targetMonth > currentMonthNum)) {
-      return { baseAmount, lateFine: 0, totalAmount: baseAmount };
-    }
-    
-    // Past month -> Max fine
-    if (targetYear < currentYear || (targetYear === currentYear && targetMonth < currentMonthNum)) {
-      const maxFine = (settings.lateFee || 0) + (settings.secondPenaltyAmount || 0);
-      return { baseAmount, lateFine: maxFine, totalAmount: baseAmount + maxFine };
-    }
-  }
-
-  // Current month -> Day based calculation
-  const currentDay = d.getDate();
-  let lateFine = 0;
-  if (currentDay >= settings.firstLateFeeStartDay) {
-    lateFine += settings.lateFee;
-  }
-  if (currentDay >= settings.secondPenaltyDate) {
-    lateFine += settings.secondPenaltyAmount;
-  }
-
-  return {
-    baseAmount,
-    lateFine,
-    totalAmount: baseAmount + lateFine
-  };
 }

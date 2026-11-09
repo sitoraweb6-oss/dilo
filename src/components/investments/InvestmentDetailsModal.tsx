@@ -132,8 +132,8 @@ export function InvestmentDetailsModal({ investment, onClose, availableFund }: P
         const paymentsSnap = await getDocs(query(collection(db, 'payments'), where('status', '==', 'approved')));
         const yearlySnap = await getDocs(query(collection(db, 'yearlyPayments'), where('status', '==', 'approved')));
         let totalCollection = 0;
-        paymentsSnap.forEach(d => totalCollection += d.data().amount || 0);
-        yearlySnap.forEach(d => totalCollection += d.data().amount || 0);
+        paymentsSnap.forEach(d => { if (!d.data().isCopiedRecord) totalCollection += d.data().amount || 0; });
+        yearlySnap.forEach(d => { if (!d.data().isCopiedRecord) totalCollection += d.data().amount || 0; });
 
         const expensesSnap = await getDocs(query(collection(db, 'expenses'), where('status', '==', 'approved')));
         let totalExpense = 0;

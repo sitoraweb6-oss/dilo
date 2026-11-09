@@ -6,11 +6,13 @@ import { format, differenceInMilliseconds } from 'date-fns';
 export function PaymentDeadlineCountdown({ 
   paymentStatus, 
   dueAmount,
-  onPayClick
+  onPayClick,
+  dueDay = 25
 }: { 
   paymentStatus: 'approved' | 'partial' | 'pending' | 'not_submitted',
   dueAmount: number,
-  onPayClick: () => void
+  onPayClick: () => void,
+  dueDay?: number
 }) {
   const prefersReducedMotion = useReducedMotion();
   const [timeLeft, setTimeLeft] = useState({ days: 0, hours: 0, minutes: 0 });
@@ -20,7 +22,8 @@ export function PaymentDeadlineCountdown({
     const calculateTimeLeft = () => {
       const now = new Date();
       // Deadline is 25th of the CURRENT month
-      let deadline = new Date(now.getFullYear(), now.getMonth(), 25, 23, 59, 59, 999);
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      let deadline = new Date(now.getFullYear(), now.getMonth(), Math.min(dueDay, lastDay), 23, 59, 59, 999);
       
       const diff = deadline.getTime() - now.getTime();
       
@@ -40,7 +43,7 @@ export function PaymentDeadlineCountdown({
     calculateTimeLeft();
     const timer = setInterval(calculateTimeLeft, 60000); // Update every minute
     return () => clearInterval(timer);
-  }, []);
+  }, [dueDay]);
 
   if (paymentStatus === 'approved') return null;
 
@@ -88,7 +91,7 @@ export function PaymentDeadlineCountdown({
       <div className="flex items-center gap-2 text-slate-700 mb-4">
         <Clock size={18} className="text-amber-500" />
         <h3 className="font-bold text-sm">পেমেন্ট ডেডলাইন</h3>
-        <span className="ml-auto text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded-full font-medium">২৫ তারিখ</span>
+        <span className="ml-auto text-[10px] bg-slate-100 text-slate-500 px-2 py-1 rounded-full font-medium">{dueDay.toLocaleString('bn-BD')} তারিখ</span>
       </div>
 
       <div className="flex gap-3 mb-1">
